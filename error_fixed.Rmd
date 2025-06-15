@@ -1,0 +1,93 @@
+---
+title: "Data Summary"
+author: "Marco Pena"
+date: "2025-06-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r import-and-clean, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+
+survey_data <- read_csv("results-survey714832.csv", na = c("N/A", "NA", ""))
+
+problem_rows <- problems(survey_data)
+print(problem_rows)
+
+write_csv(problem_rows, "parsing_issues.csv")
+
+saveRDS(survey_data, file = "crew_survey_cleaned_1.rds")
+```
+
+## Parsing Issues Analysis
+
+The parsing issues show that there's a problem at row 2149, column 225, where the parser expected a logical value (TRUE/FALSE) but found "White" instead. This suggests that column 225 contains mixed data types.
+
+```{r fix-parsing-issues, message=FALSE, warning=FALSE}
+
+# First, let's examine the problematic column (225)
+
+cat("Examining column 225 around row 2149:\n")
+if(ncol(survey_data) >= 225) {
+  col_225_sample <- survey_data[2145:2155, 225, drop = FALSE]
+  print(col_225_sample)
+  
+  # Check the column name
+  cat("\nColumn 225 name:", names(survey_data)[225], "\n")
+  
+  # Check unique values in this column to understand the data pattern
+  cat("\nUnique values in column 225 (first 20):\n")
+  unique_vals <- unique(survey_data[[225]])
+  print(head(unique_vals, 20))
+  
+  # Check data types
+  cat("\nColumn 225 class:", class(survey_data[[225]]), "\n")
+}
+
+# Read everything as character first, then convert
+survey_data_safe <- read_csv("results-survey714832.csv", 
+                            na = c("N/A", "NA", ""),
+                            col_types = cols(.default = col_character()))
+
+# Check
+problem_rows_fixed <- problems(survey_data_safe)
+cat("\nNumber of parsing issues after fix:", nrow(problem_rows_fixed), "\n")
+
+if(nrow(problem_rows_fixed) == 0) {
+  cat("All parsing issues resolved!\n")
+} else {
+  cat("Some parsing issues remain:\n")
+  print(problem_rows_fixed)
+}
+
+survey_data_clean <- survey_data_safe %>%
+  # Convert columns that should be logical but were read as character
+  mutate(across(where(~ all(. %in% c("TRUE", "FALSE", "Yes", "No", NA), na.rm = TRUE)), 
+                ~ case_when(
+                  . %in% c("TRUE", "Yes") ~ TRUE,
+                  . %in% c("FALSE", "No") ~ FALSE,
+                  TRUE ~ NA
+                ))) %>%
+  # Convert numeric-looking columns back to numeric
+  mutate(across(where(~ {
+    non_na_vals <- .x[!is.na(.x)]
+    length(non_na_vals) > 0 && all(str_detect(non_na_vals, "^\\d+$|^\\d*\\.\\d+$"))
+  }), ~ as.numeric(.)))
+
+cat("\nData successfully cleaned and typed!\n")
+cat("Original dimensions:", dim(survey_data), "\n")
+cat("Cleaned dimensions:", dim(survey_data_clean), "\n")
+
+# Save the properly cleaned data
+saveRDS(survey_data_clean, file = "crew_survey_cleaned_fixed.rds")
+
+cat("Cleaned data saved as 'crew_survey_cleaned_fixed.rds'\n")
+```
+
+## Summary
+
+The main parsing issue was caused by mixed data types in column 225, where the CSV parser expected logical values but encountered text values like "White". 
