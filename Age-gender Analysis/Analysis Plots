@@ -1,0 +1,483 @@
+---
+title: "Demographic Analysis: 2020-2025 Survey Comparison"
+subtitle: "Age-Gender Distribution Analysis and Weighting Assessment"
+author: "Marco Pena"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, 
+  warning = FALSE, 
+  message = FALSE,
+  fig.width = 12, 
+  fig.height = 8,
+  dpi = 300,
+  out.width = "100%"
+)
+
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(viridis)
+library(scales)
+library(tidyr)
+library(RColorBrewer)
+library(DT)
+```
+
+```{r load-data}
+data_2020 <- read.csv("2020.csv")
+data_2025 <- read.csv("crew_datset_keys_analysis_ready.csv")
+
+age_order <- c("Under 25", "25-29", "30-34", "35-39", "40-44", "45-49",
+               "50-54", "55-59", "60-64", "65 or older")
+
+standardize_gender <- function(gender_col) {
+  gender_col <- tolower(trimws(gender_col))
+  case_when(
+    gender_col %in% c("female", "woman") ~ "Women",
+    gender_col %in% c("male", "man") ~ "Men",
+    grepl("nonbinary|non-binary", gender_col) ~ "Nonbinary",
+    TRUE ~ as.character(gender_col)
+  )
+}
+
+df_2020 <- data_2020 %>%
+  select(gender = m27, age = m25) %>%
+  filter(!is.na(gender) & !is.na(age) & gender != "") %>%
+  mutate(
+    gender = standardize_gender(gender),
+    age = factor(age, levels = age_order),
+    year = 2020
+  )
+
+df_2025 <- data_2025 %>%
+  select(gender = m27, age = m25) %>%
+  filter(!is.na(gender) & !is.na(age) & gender != "") %>%
+  mutate(
+    gender = standardize_gender(gender),
+    age = factor(age, levels = age_order),
+    year = 2025
+  )
+
+gender_colors <- c("Women" = "#e74c3c", "Men" = "#3498db", "Nonbinary" = "#9b59b6")
+```
+
+# Executive Summary
+
+This report analyzes demographic shifts between our 2020 and 2025 surveys, focusing on age-gender distributions by examining whether weighting the 2025 data to match the 2020 demographic composition would improve comparability between survey waves.
+
+**Key Findings:**
+
+- 2020 sample: **`r format(nrow(df_2020), big.mark=",")`** respondents
+- 2025 sample: **`r format(nrow(df_2025), big.mark=",")`** respondents
+- Demographic composition differences detected between survey waves
+- Statistical weighting analysis performed to assess need for adjustments
+
+# Dataset Overview
+
+## Sample Composition
+
+```{r sample-overview}
+summary_data <- data.frame(
+  Dataset = c("2020 Survey", "2025 Survey"),
+  `Sample Size` = c(nrow(df_2020), nrow(df_2025)),
+  `Women (%)` = c(
+    round(sum(df_2020$gender == "Women") / nrow(df_2020) * 100, 1),
+    round(sum(df_2025$gender == "Women") / nrow(df_2025) * 100, 1)
+  ),
+  `Men (%)` = c(
+    round(sum(df_2020$gender == "Men") / nrow(df_2020) * 100, 1),
+    round(sum(df_2025$gender == "Men") / nrow(df_2025) * 100, 1)
+  ),
+  `Nonbinary (%)` = c(
+    round(sum(df_2020$gender == "Nonbinary") / nrow(df_2020) * 100, 1),
+    round(sum(df_2025$gender == "Nonbinary") / nrow(df_2025) * 100, 1)
+  )
+)
+
+kable(summary_data, 
+      caption = "Sample Composition Overview",
+      col.names = c("Dataset", "Sample Size", "Women (%)", "Men (%)", "Nonbinary (%)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE, background = "#f7f7f7") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#3498db")
+```
+
+## Age-Gender Cross-Tabulations
+
+```{r cross-tabs}
+table_2020 <- table(df_2020$age, df_2020$gender)
+table_2025 <- table(df_2025$age, df_2025$gender)
+
+table_2020_df <- as.data.frame.matrix(table_2020)
+table_2020_df <- cbind(`Age Group` = rownames(table_2020_df), table_2020_df)
+rownames(table_2020_df) <- NULL  # Remove row names to avoid duplication
+
+kable(table_2020_df, 
+      caption = "2020 Age-Gender Distribution (Counts)",
+      align = c("l", rep("c", ncol(table_2020_df) - 1)),
+      row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE, background = "#f7f7f7") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#3498db")
+
+table_2025_df <- as.data.frame.matrix(table_2025)
+table_2025_df <- cbind(`Age Group` = rownames(table_2025_df), table_2025_df)
+rownames(table_2025_df) <- NULL  # Remove row names to avoid duplication
+
+kable(table_2025_df, 
+      caption = "2025 Age-Gender Distribution (Counts)",
+      align = c("l", rep("c", ncol(table_2025_df) - 1)),
+      row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE, background = "#f7f7f7") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#3498db")
+```
+
+# Weighting Analysis
+
+## Methodology
+
+We calculated weights to adjust the 2025 data to match the 2020 demographic distribution:
+
+**Weight Formula:** Weight = (2020 Proportion) ÷ (2025 Proportion)
+
+This approach allows us to examine what the 2025 results would look like if the sample had the same age-gender composition as 2020.
+
+```{r weighting-calculations}
+prop_2020 <- prop.table(table_2020)
+prop_2025 <- prop.table(table_2025)
+
+combinations_2020 <- expand.grid(Age = rownames(table_2020), Gender = colnames(table_2020), stringsAsFactors = FALSE)
+combinations_2020$count_2020 <- apply(combinations_2020, 1, function(x) table_2020[x[1], x[2]])
+
+combinations_2025 <- expand.grid(Age = rownames(table_2025), Gender = colnames(table_2025), stringsAsFactors = FALSE)
+combinations_2025$count_2025 <- apply(combinations_2025, 1, function(x) table_2025[x[1], x[2]])
+
+all_combinations <- merge(combinations_2025, combinations_2020, by = c("Age", "Gender"), all.x = TRUE)
+all_combinations$count_2020[is.na(all_combinations$count_2020)] <- 0
+missing_in_2020 <- all_combinations[all_combinations$count_2020 == 0, ]
+
+all_ages <- union(rownames(prop_2020), rownames(prop_2025))
+all_genders <- union(colnames(prop_2020), colnames(prop_2025))
+
+prop_2020_expanded <- matrix(0, nrow = length(all_ages), ncol = length(all_genders),
+                            dimnames = list(all_ages, all_genders))
+prop_2025_expanded <- matrix(0, nrow = length(all_ages), ncol = length(all_genders),
+                            dimnames = list(all_ages, all_genders))
+
+for(age in rownames(prop_2020)) {
+  for(gender in colnames(prop_2020)) {
+    prop_2020_expanded[age, gender] <- prop_2020[age, gender]
+  }
+}
+
+for(age in rownames(prop_2025)) {
+  for(gender in colnames(prop_2025)) {
+    prop_2025_expanded[age, gender] <- prop_2025[age, gender]
+  }
+}
+
+weight_matrix <- prop_2020_expanded / prop_2025_expanded
+weight_matrix[is.infinite(weight_matrix)] <- 0
+weight_matrix[is.na(weight_matrix)] <- 0
+weight_matrix[prop_2025_expanded == 0] <- 0
+
+df_2025_weighted <- df_2025 %>%
+  mutate(
+    age_char = as.character(age),
+    gender_char = as.character(gender)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    weight = ifelse(
+      age_char %in% rownames(weight_matrix) & gender_char %in% colnames(weight_matrix),
+      weight_matrix[age_char, gender_char],
+      0
+    )
+  ) %>%
+  ungroup() %>%
+  select(-age_char, -gender_char) %>%
+  filter(weight > 0)
+```
+
+**Data Quality Note:** Some age-gender combinations exist in 2025 but have zero representation in 2020. These cases receive zero weights and are excluded from the weighted analysis.
+
+```{r missing-combinations}
+if(nrow(missing_in_2020) > 0) {
+  missing_display <- missing_in_2020[, c("Age", "Gender", "count_2025", "count_2020")]
+  names(missing_display) <- c("Age Group", "Gender", "2025 Count", "2020 Count")
+  
+  kable(missing_display, 
+        caption = "Age-Gender Combinations in 2025 with Zero 2020 Representation",
+        row.names = FALSE) %>%
+    kable_styling(bootstrap_options = c("striped", "hover"), 
+                  full_width = FALSE, position = "center") %>%
+    column_spec(4, bold = TRUE, color = "red")
+}
+```
+
+# Visual Analysis
+
+## Distribution Comparison
+
+```{r prepare-plot-data}
+plot_data_2020 <- df_2020 %>%
+  count(age, gender) %>%
+  mutate(dataset = "2020 Original", 
+         proportion = n / sum(n),
+         percentage = proportion * 100)
+
+plot_data_unweighted <- df_2025 %>%
+  count(age, gender) %>%
+  mutate(dataset = "2025 Unweighted", 
+         proportion = n / sum(n),
+         percentage = proportion * 100)
+
+plot_data_weighted <- df_2025_weighted %>%
+  count(age, gender, wt = weight) %>%
+  mutate(dataset = "2025 Weighted", 
+         proportion = n / sum(n),
+         percentage = proportion * 100)
+
+all_plot_data <- bind_rows(plot_data_2020, plot_data_unweighted, plot_data_weighted) %>%
+  mutate(dataset = factor(dataset, levels = c("2020 Original", "2025 Unweighted", "2025 Weighted")))
+```
+
+```{r chart1, fig.cap="Age-Gender Distribution Across All Datasets"}
+chart1 <- ggplot(all_plot_data, aes(x = age, y = percentage, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  facet_wrap(~dataset, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    strip.text = element_text(size = 12, face = "bold"),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Age-Gender Distribution Comparison",
+    subtitle = "Comparing 2020 baseline, 2025 unweighted, and 2025 weighted distributions",
+    x = "Age Group", 
+    y = "Percentage (%)", 
+    fill = "Gender"
+  )
+
+print(chart1)
+```
+
+## Gender Distribution Overview
+
+```{r chart2, fig.cap="Overall Gender Distribution Comparison"}
+gender_summary <- all_plot_data %>%
+  group_by(dataset, gender) %>%
+  summarise(total_percentage = sum(percentage), .groups = "drop")
+
+chart2 <- ggplot(gender_summary, aes(x = dataset, y = total_percentage, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8, width = 0.7) +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 11),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5)
+  ) +
+  labs(
+    title = "Overall Gender Distribution Comparison",
+    x = "Dataset", 
+    y = "Percentage (%)", 
+    fill = "Gender"
+  ) +
+  geom_text(aes(label = paste0(round(total_percentage, 1), "%")), 
+            position = position_dodge(width = 0.7), vjust = -0.3, size = 3.5)
+
+print(chart2)
+```
+
+## Demographic Shift Analysis
+
+```{r demographic-shift-analysis}
+comparison_2020_vs_2025 <- plot_data_2020 %>%
+  select(age, gender, pct_2020 = percentage) %>%
+  left_join(
+    plot_data_unweighted %>% select(age, gender, pct_2025_unweighted = percentage),
+    by = c("age", "gender")
+  ) %>%
+  mutate(
+    pct_2025_unweighted = ifelse(is.na(pct_2025_unweighted), 0, pct_2025_unweighted),
+    difference_unweighted = pct_2025_unweighted - pct_2020,
+    abs_difference = abs(difference_unweighted)
+  )
+
+total_absolute_change <- sum(comparison_2020_vs_2025$abs_difference, na.rm = TRUE)
+max_change <- max(comparison_2020_vs_2025$abs_difference, na.rm = TRUE)
+```
+
+```{r chart3, fig.cap="Demographic Changes Between 2020 and 2025"}
+chart3 <- ggplot(comparison_2020_vs_2025, aes(x = age, y = difference_unweighted, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 1) +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Demographic Shift Analysis: 2025 vs 2020",
+    subtitle = "Positive values indicate higher representation in 2025",
+    x = "Age Group", 
+    y = "Percentage Point Difference (2025 - 2020)", 
+    fill = "Gender"
+  )
+
+print(chart3)
+```
+
+```{r chart4, fig.cap="Magnitude of Demographic Changes by Group"}
+chart4_data <- comparison_2020_vs_2025 %>%
+  arrange(desc(abs_difference)) %>%
+  mutate(group_label = paste(age, gender, sep = " - ")) %>%
+  head(10)  # Show top 10 changes
+
+chart4 <- ggplot(chart4_data, aes(x = reorder(group_label, abs_difference), y = abs_difference, fill = gender)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  scale_fill_manual(values = gender_colors) +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Top 10 Demographic Changes by Magnitude",
+    subtitle = paste("Total demographic change:", round(total_absolute_change, 1), "percentage points"),
+    x = "Age-Gender Group", 
+    y = "Absolute Change (Percentage Points)", 
+    fill = "Gender"
+  )
+
+print(chart4)
+```
+
+## Impact of Weighting
+
+```{r chart5, fig.cap="Effect of Weighting on 2025 Distribution"}
+diff_data <- plot_data_weighted %>%
+  select(age, gender, weighted_pct = percentage) %>%
+  left_join(
+    plot_data_unweighted %>% select(age, gender, unweighted_pct = percentage),
+    by = c("age", "gender")
+  ) %>%
+  mutate(difference = weighted_pct - unweighted_pct)
+
+chart5 <- ggplot(diff_data, aes(x = age, y = difference, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 1) +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Impact of Weighting on 2025 Data",
+    subtitle = "Difference between weighted and unweighted 2025 distributions",
+    x = "Age Group", 
+    y = "Percentage Point Difference", 
+    fill = "Gender"
+  )
+
+print(chart5)
+```
+
+# Statistical Summary
+
+```{r summary-stats}
+summary_stats <- data.frame(
+  Metric = c(
+    "2020 Sample Size", 
+    "2025 Sample Size", 
+    "2025 Effective Sample Size (Weighted)",
+    "Total Demographic Change",
+    "Largest Single Group Change",
+    "Cases Excluded from Weighting"
+  ),
+  Value = c(
+    format(nrow(df_2020), big.mark = ","),
+    format(nrow(df_2025), big.mark = ","),
+    format(round(sum(df_2025_weighted$weight), 0), big.mark = ","),
+    paste(round(total_absolute_change, 1), "percentage points"),
+    paste(round(max_change, 1), "percentage points"),
+    format(nrow(df_2025) - nrow(df_2025_weighted), big.mark = ",")
+  )
+)
+
+kable(summary_stats, 
+      caption = "Statistical Summary",
+      col.names = c("Metric", "Value")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), 
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE, width = "60%") %>%
+  column_spec(2, width = "40%")
+```
+
+# Recommendations
+
+## Weighting Decision Analysis
+
+Based on our demographic shift analysis, here are our findings and recommendations:
+
+**Key Metrics:**
+
+- **Total demographic change:** `r round(total_absolute_change, 1)` percentage points
+- **Largest single group change:** `r round(max_change, 1)` percentage points  
+- **Sample retention after weighting:** `r round(nrow(df_2025_weighted)/nrow(df_2025)*100, 1)`%
+
+```{r recommendations, results='asis'}
+if(total_absolute_change > 10) {
+  cat('**Recommendation: Use Weighted Data**\n\n')
+  cat('**Reason:** Large demographic shifts detected (>10 percentage points total change)\n\n')
+  cat('The substantial differences in age-gender composition between 2020 and 2025 suggest that weighting will significantly improve comparability between survey waves.\n\n')
+} else if(total_absolute_change > 5) {
+  cat('**Recommendation: Consider Weighted Data**\n\n')
+  cat('**Reason:** Moderate demographic shifts detected (5-10 percentage points total change)\n\n')
+  cat('While not essential, weighting may provide more accurate trend comparisons by controlling for demographic composition changes.\n\n')
+} else {
+  cat('**Recommendation: Unweighted Data Sufficient**\n\n')
+  cat('**Reason:** Small demographic shifts detected (<5 percentage points total change)\n\n')
+  cat('The demographic composition is relatively stable between survey waves. Unweighted analysis should provide reliable results.\n\n')
+}
+
+if(max_change > 3) {
+  cat('**Additional Note:** At least one demographic group changed by more than 3 percentage points. Consider examining results for specific subgroups that may be most affected by demographic shifts.\n\n')
+}
+```
