@@ -1,0 +1,402 @@
+---
+title: "Age Distribution Analysis with Collapsed Age Groups"
+subtitle: "Updated Analysis with 5 Age Brackets"
+author: "Marco Pena"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, 
+  warning = FALSE, 
+  message = FALSE,
+  fig.width = 12, 
+  fig.height = 8,
+  dpi = 300,
+  out.width = "100%"
+)
+
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(scales)
+library(tidyr)
+```
+
+```{r load-data}
+data_2020 <- read.csv("2020.csv")
+data_2025 <- read.csv("crew_datset_keys_analysis_ready.csv")
+
+collapse_age_groups <- function(age_col) {
+  case_when(
+    age_col %in% c("Under 25", "25-29") ~ "Under 30",
+    age_col %in% c("30-34", "35-39") ~ "30-39", 
+    age_col %in% c("40-44", "45-49") ~ "40-49",
+    age_col %in% c("50-54", "55-59") ~ "50-59",
+    age_col %in% c("60-64", "65 or older") ~ "60+",
+    TRUE ~ as.character(age_col)
+  )
+}
+
+collapsed_age_order <- c("Under 30", "30-39", "40-49", "50-59", "60+")
+
+standardize_gender <- function(gender_col) {
+  gender_col <- tolower(trimws(gender_col))
+  case_when(
+    gender_col %in% c("female", "woman") ~ "Women",
+    gender_col %in% c("male", "man") ~ "Men",
+    grepl("nonbinary|non-binary", gender_col) ~ "Nonbinary",
+    TRUE ~ as.character(gender_col)
+  )
+}
+
+df_2020 <- data_2020 %>%
+  select(gender = m27, age = m25) %>%
+  filter(!is.na(gender) & !is.na(age) & gender != "") %>%
+  mutate(
+    gender = standardize_gender(gender),
+    age = factor(collapse_age_groups(age), levels = collapsed_age_order),
+    year = 2020
+  )
+
+df_2025 <- data_2025 %>%
+  select(gender = m27, age = m25) %>%
+  filter(!is.na(gender) & !is.na(age) & gender != "") %>%
+  mutate(
+    gender = standardize_gender(gender),
+    age = factor(collapse_age_groups(age), levels = collapsed_age_order),
+    year = 2025
+  )
+
+gender_colors <- c("Women" = "#e74c3c", "Men" = "#3498db", "Nonbinary" = "#9b59b6")
+```
+
+# Age Group Consolidation Summary
+
+**Original Age Groups (10):** Under 25, 25-29, 30-34, 35-39, 40-44, 45-49, 50-54, 55-59, 60-64, 65 or older
+
+**New Age Groups (5):**
+- **Under 30** (combines Under 25 + 25-29)
+- **30-39** (combines 30-34 + 35-39)
+- **40-49** (combines 40-44 + 45-49)
+- **50-59** (combines 50-54 + 55-59)
+- **60+** (combines 60-64 + 65 or older)
+
+```{r sample-sizes}
+cat("=== Sample Sizes with Collapsed Age Groups ===\n")
+cat("2020 Dataset by Age:\n")
+print(table(df_2020$age))
+cat("\n2025 Dataset by Age:\n") 
+print(table(df_2025$age))
+
+table_2020_new <- table(df_2020$age, df_2020$gender)
+table_2025_new <- table(df_2025$age, df_2025$gender)
+
+cat("\n=== 2020 Age-Gender Cross-tabulation (Collapsed Groups) ===\n")
+print(table_2020_new)
+cat("\n=== 2025 Age-Gender Cross-tabulation (Collapsed Groups) ===\n")
+print(table_2025_new)
+```
+
+```{r weighting-calculations}
+prop_2020 <- prop.table(table_2020_new)
+prop_2025 <- prop.table(table_2025_new)
+
+all_ages <- union(rownames(prop_2020), rownames(prop_2025))
+all_genders <- union(colnames(prop_2020), colnames(prop_2025))
+
+prop_2020_expanded <- matrix(0, nrow = length(all_ages), ncol = length(all_genders),
+                            dimnames = list(all_ages, all_genders))
+prop_2025_expanded <- matrix(0, nrow = length(all_ages), ncol = length(all_genders),
+                            dimnames = list(all_ages, all_genders))
+
+for(age in rownames(prop_2020)) {
+  for(gender in colnames(prop_2020)) {
+    prop_2020_expanded[age, gender] <- prop_2020[age, gender]
+  }
+}
+
+for(age in rownames(prop_2025)) {
+  for(gender in colnames(prop_2025)) {
+    prop_2025_expanded[age, gender] <- prop_2025[age, gender]
+  }
+}
+
+weight_matrix <- prop_2020_expanded / prop_2025_expanded
+weight_matrix[is.infinite(weight_matrix)] <- 0
+weight_matrix[is.na(weight_matrix)] <- 0
+weight_matrix[prop_2025_expanded == 0] <- 0
+
+df_2025_weighted <- df_2025 %>%
+  mutate(
+    age_char = as.character(age),
+    gender_char = as.character(gender)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    weight = ifelse(
+      age_char %in% rownames(weight_matrix) & gender_char %in% colnames(weight_matrix),
+      weight_matrix[age_char, gender_char],
+      0
+    )
+  ) %>%
+  ungroup() %>%
+  select(-age_char, -gender_char) %>%
+  filter(weight > 0)
+
+plot_data_2020 <- df_2020 %>%
+  count(age, gender) %>%
+  mutate(dataset = "2020 Original", 
+         proportion = n / sum(n),
+         percentage = proportion * 100)
+
+plot_data_unweighted <- df_2025 %>%
+  count(age, gender) %>%
+  mutate(dataset = "2025 Unweighted", 
+         proportion = n / sum(n),
+         percentage = proportion * 100)
+
+plot_data_weighted <- df_2025_weighted %>%
+  count(age, gender, wt = weight) %>%
+  mutate(dataset = "2025 Weighted", 
+         proportion = n / sum(n),
+         percentage = proportion * 100)
+
+all_plot_data <- bind_rows(plot_data_2020, plot_data_unweighted, plot_data_weighted) %>%
+  mutate(dataset = factor(dataset, levels = c("2020 Original", "2025 Unweighted", "2025 Weighted")))
+
+comparison_2020_vs_2025 <- plot_data_2020 %>%
+  select(age, gender, pct_2020 = percentage) %>%
+  left_join(
+    plot_data_unweighted %>% select(age, gender, pct_2025_unweighted = percentage),
+    by = c("age", "gender")
+  ) %>%
+  mutate(
+    pct_2025_unweighted = ifelse(is.na(pct_2025_unweighted), 0, pct_2025_unweighted),
+    difference_unweighted = pct_2025_unweighted - pct_2020,
+    abs_difference = abs(difference_unweighted)
+  )
+
+total_absolute_change <- sum(comparison_2020_vs_2025$abs_difference, na.rm = TRUE)
+max_change <- max(comparison_2020_vs_2025$abs_difference, na.rm = TRUE)
+```
+
+# Age Distribution Visualizations
+
+## Chart 1: Age-Gender Distribution Comparison (All Datasets)
+
+```{r chart1, fig.cap="Age-Gender Distribution with Collapsed Age Groups"}
+chart1 <- ggplot(all_plot_data, aes(x = age, y = percentage, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  facet_wrap(~dataset, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    strip.text = element_text(size = 13, face = "bold"),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Age-Gender Distribution Comparison (Collapsed Age Groups)",
+    subtitle = "5 Age brackets: Under 30, 30-39, 40-49, 50-59, 60+",
+    x = "Age Group", 
+    y = "Percentage (%)", 
+    fill = "Gender"
+  )
+
+print(chart1)
+```
+
+## Chart 2: Age Distribution Trends Across Datasets
+
+```{r chart2, fig.cap="Age Distribution Trends with Collapsed Groups"}
+age_summary <- all_plot_data %>%
+  group_by(dataset, age) %>%
+  summarise(total_percentage = sum(percentage), .groups = "drop")
+
+chart2 <- ggplot(age_summary, aes(x = age, y = total_percentage, color = dataset, group = dataset)) +
+  geom_line(size = 1.5, alpha = 0.8) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(values = c("#2c3e50", "#e67e22", "#27ae60")) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Age Distribution Trends (Collapsed Groups)",
+    subtitle = "Overall age composition across datasets",
+    x = "Age Group", 
+    y = "Percentage (%)", 
+    color = "Dataset"
+  ) +
+  geom_text(aes(label = paste0(round(total_percentage, 1), "%")), 
+            vjust = -0.5, size = 3, show.legend = FALSE)
+
+print(chart2)
+```
+
+## Chart 3: Demographic Shift Analysis (2025 vs 2020)
+
+```{r chart3, fig.cap="Demographic Changes with Collapsed Age Groups"}
+chart3 <- ggplot(comparison_2020_vs_2025, aes(x = age, y = difference_unweighted, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 1) +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Demographic Shift Analysis: 2025 vs 2020 (Collapsed Groups)",
+    subtitle = "Positive values indicate higher representation in 2025",
+    x = "Age Group", 
+    y = "Percentage Point Difference (2025 - 2020)", 
+    fill = "Gender"
+  ) +
+  geom_text(aes(label = paste0(ifelse(difference_unweighted >= 0, "+", ""), 
+                               round(difference_unweighted, 1))), 
+            position = position_dodge(width = 0.9), 
+            vjust = ifelse(comparison_2020_vs_2025$difference_unweighted >= 0, -0.3, 1.3), 
+            size = 3)
+
+print(chart3)
+```
+
+## Chart 4: Impact of Weighting on 2025 Distribution
+
+```{r chart4, fig.cap="Effect of Weighting with Collapsed Age Groups"}
+diff_data <- plot_data_weighted %>%
+  select(age, gender, weighted_pct = percentage) %>%
+  left_join(
+    plot_data_unweighted %>% select(age, gender, unweighted_pct = percentage),
+    by = c("age", "gender")
+  ) %>%
+  mutate(difference = weighted_pct - unweighted_pct)
+
+chart4 <- ggplot(diff_data, aes(x = age, y = difference, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 1) +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray50")
+  ) +
+  labs(
+    title = "Impact of Weighting on 2025 Data (Collapsed Groups)",
+    subtitle = "Difference between weighted and unweighted 2025 distributions",
+    x = "Age Group", 
+    y = "Percentage Point Difference", 
+    fill = "Gender"
+  ) +
+  geom_text(aes(label = paste0(ifelse(difference >= 0, "+", ""), 
+                               round(difference, 1))), 
+            position = position_dodge(width = 0.9), 
+            vjust = ifelse(diff_data$difference >= 0, -0.3, 1.3), 
+            size = 3)
+
+print(chart4)
+```
+
+## Chart 5: Sample Size Comparison (Before vs After Collapse)
+
+```{r chart5, fig.cap="Sample Size Improvement from Age Group Consolidation", fig.width=10, fig.height=6}
+original_age_order <- c("Under 25", "25-29", "30-34", "35-39", "40-44", "45-49",
+                       "50-54", "55-59", "60-64", "65 or older")
+
+df_2025_original <- data_2025 %>%
+  select(gender = m27, age = m25) %>%
+  filter(!is.na(gender) & !is.na(age) & gender != "") %>%
+  mutate(
+    gender = standardize_gender(gender),
+    age = factor(age, levels = original_age_order)
+  )
+
+table_2025_original <- table(df_2025_original$age, df_2025_original$gender)
+
+min_men_original <- min(table_2025_original[, "Men"])
+min_women_original <- min(table_2025_original[, "Women"]) 
+min_nonbinary_original <- min(table_2025_original[, "Nonbinary"])
+
+min_men_collapsed <- min(table_2025_new[, "Men"])
+min_women_collapsed <- min(table_2025_new[, "Women"])
+min_nonbinary_collapsed <- min(table_2025_new[, "Nonbinary"])
+
+sample_comparison <- data.frame(
+  scenario = rep(c("Collapsed\n(5 groups)", "Original\n(10 groups)"), each = 3),
+  gender = rep(c("Men", "Women", "Nonbinary"), 2),
+  min_cell_size = c(
+    min_men_collapsed,
+    min_women_collapsed, 
+    min_nonbinary_collapsed,
+    min_men_original,
+    min_women_original,
+    min_nonbinary_original
+  )
+)
+
+sample_comparison$scenario <- factor(sample_comparison$scenario, 
+                                   levels = c("Collapsed\n(5 groups)", "Original\n(10 groups)"))
+
+cat("=== Minimum Cell Sizes Comparison ===\n")
+cat("Collapsed (5 groups):\n")
+cat("Men:", min_men_collapsed, "\n")
+cat("Women:", min_women_collapsed, "\n") 
+cat("Nonbinary:", min_nonbinary_collapsed, "\n")
+cat("\nOriginal (10 groups):\n")
+cat("Men:", min_men_original, "\n")
+cat("Women:", min_women_original, "\n")
+cat("Nonbinary:", min_nonbinary_original, "\n")
+
+chart5 <- ggplot(sample_comparison, aes(x = scenario, y = min_cell_size, fill = gender)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8, width = 0.6) +
+  scale_fill_manual(values = gender_colors) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 10, hjust = 0.5),
+    axis.text.y = element_text(size = 10),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray50"),
+    plot.margin = margin(20, 40, 20, 20, "pt")
+  ) +
+  labs(
+    title = "Minimum Cell Size Improvement",
+    subtitle = "Smallest sample size in any age-gender combination (higher is better)",
+    x = "Age Group Scenario", 
+    y = "Minimum Cell Size", 
+    fill = "Gender"
+  ) +
+  geom_text(aes(label = min_cell_size), 
+            position = position_dodge(width = 0.6), 
+            vjust = -0.5, size = 3.5, fontface = "bold") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  coord_cartesian(clip = "off")
+
+print(chart5)
+```
