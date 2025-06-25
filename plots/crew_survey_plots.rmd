@@ -1,0 +1,685 @@
+---
+title: "Crew Survey First Tables"
+author: "Marco Pena"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 6)
+```
+
+# Introduction
+
+This report analyzes crew survey data across multiple demographics and characteristics, presenting findings through tables and visualizations.
+
+# Data Setup and Preparation
+
+```{r data-prep}
+# Load required libraries
+library(tidyverse)
+library(janitor)
+library(knitr)
+library(kableExtra)
+library(dplyr)
+
+# Load and clean data
+crew_data <- readRDS("crew_dataset_keys_analysis_ready.rds")
+# Create clean gender variable
+crew_data <- crew_data %>%
+  mutate(
+    gender_clean = case_when(
+      str_to_lower(m27) %in% c("female", "woman") ~ "Women",
+      str_to_lower(m27) %in% c("male", "man") ~ "Men",
+      str_detect(str_to_lower(m27), "nonbinary|non-binary") ~ "Nonbinary",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+# Analysis Results
+
+## 1. Gender Distribution Across Years
+
+This table shows the distribution of respondents by gender across different survey years from 2005 to 2025.
+
+```{r gender-table}
+# Current year (2025) data
+gender_2025 <- crew_data %>%
+  filter(!is.na(gender_clean)) %>%
+  count(Gender = gender_clean) %>%
+  mutate(Year = 2025)
+
+# Historical data
+historic <- tribble(
+  ~Gender, ~`2005`, ~`2010`, ~`2015`, ~`2020`,
+  "Women",    1175,    1972,    1700,    2414,
+  "Men",       659,     929,     482,     512,
+  "Nonbinary",   0,       0,       0,       4
+)
+
+# Combine historical and current data
+gender_2025_wide <- gender_2025 %>%
+  pivot_wider(names_from = Year, values_from = n) %>%
+  rename(`2025` = `2025`)
+
+gender_final <- historic %>%
+  left_join(gender_2025_wide, by = "Gender") %>%
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm = TRUE))
+
+# Add totals row
+totals_row <- gender_final %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  mutate(Gender = "Total") %>%
+  select(Gender, everything())
+
+gender_table_full <- bind_rows(gender_final, totals_row)
+
+# Display table
+gender_table_full %>%
+  kable(caption = "Respondents: Gender and Year of Study", align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  row_spec(nrow(gender_table_full), bold = TRUE, background = "#e6f2f5") %>%
+  column_spec(1, bold = TRUE)
+```
+
+## 2. Geographic Distribution by Gender
+
+This table presents the distribution of respondents by country and gender.
+
+```{r location-table}
+# Create location table
+location_table <- crew_data %>%
+  filter(!is.na(gender_clean), !is.na(WHEREFROM)) %>%
+  count(Country = WHEREFROM, Gender = gender_clean) %>%
+  pivot_wider(names_from = Gender, values_from = n, values_fill = 0) %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Add total row
+location_total <- location_table %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  mutate(Country = "TOTAL") %>%
+  select(Country, everything())
+
+location_full <- bind_rows(location_table, location_total)
+
+# Display table
+location_full %>%
+  kable(caption = "Respondents by Location and Gender", align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(nrow(location_full), bold = TRUE, background = "#e6f2f5") %>%
+  column_spec(1, bold = TRUE)
+```
+
+## 3. Ethnicity/Race/Origin Distribution
+
+This table shows the breakdown of respondents by ethnicity, race, or origin across gender categories.
+
+```{r ethnicity-table}
+# Create ethnicity table
+ethnicity_table <- crew_data %>%
+  filter(!is.na(gender_clean), !is.na(G20Q70)) %>%
+  count(Ethnicity = G20Q70, Gender = gender_clean) %>%
+  pivot_wider(names_from = Gender, values_from = n, values_fill = 0) %>%
+  mutate(Total = rowSums(across(where(is.numeric))))
+
+# Add grand total row
+ethnicity_total <- ethnicity_table %>%
+  summarise(across(where(is.numeric), sum)) %>%
+  mutate(Ethnicity = "Grand Total") %>%
+  select(Ethnicity, everything())
+
+ethnicity_full <- bind_rows(ethnicity_table, ethnicity_total)
+
+# Display table
+ethnicity_full %>%
+  kable(caption = "Respondents: Ethnicity/Race/Origin", align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(nrow(ethnicity_full), bold = TRUE, background = "#e6f2f5") %>%
+  column_spec(1, bold = TRUE)
+```
+
+## 4. Age Distribution by Gender
+
+This chart shows the age distribution of respondents, comparing women and men across different age groups.
+
+```{r age-chart, fig.cap="Age distribution of survey respondents by gender"}
+# Prepare age data
+age_data <- crew_data %>%
+  filter(gender_clean %in% c("Women", "Men"),
+         !is.na(m25)) %>%
+  count(Gender = gender_clean,
+        AgeGroup = m25) %>%
+  group_by(Gender) %>%
+  mutate(Percent = n / sum(n) * 100)
+
+# Standardize age group order
+age_order <- c(
+  "Under 25", "25-29", "30-34", "35-39", "40-44", "45-49",
+  "50-54", "55-59", "60-64", "65 or older"
+)
+
+age_data <- age_data %>%
+  mutate(AgeGroup = factor(AgeGroup, levels = age_order))
+
+# Create age distribution chart
+ggplot(age_data, aes(x = AgeGroup, y = Percent, fill = Gender)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = sprintf("%.1f%%", Percent)),
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0, 17)) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  labs(
+    title = "Respondents: Age Distribution",
+    x = NULL,
+    y = NULL,
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    panel.grid.major.x = element_blank()
+  )
+```
+
+## 5. Prior Survey Participation
+
+This chart displays the participation history of respondents in previous benchmarking surveys.
+
+```{r survey-participation, fig.cap="Prior participation in benchmarking surveys by gender"}
+# Rename columns for clarity
+crew_data <- crew_data %>%
+  rename(
+    `2010` = 'i0[2]',
+    `2015` = 'i0[3]',
+    `2020` = 'i0[6]',
+    `Never` = 'i0[4]',
+    `Unsure` = 'i0[5]'
+  )
+
+# Prepare survey participation data
+survey_long <- crew_data %>%
+  filter(gender_clean %in% c("Women", "Men")) %>%
+  pivot_longer(cols = c(`2010`, `2015`, `2020`, `Never`, `Unsure`),
+               names_to = "Survey_Year", values_to = "Response") %>%
+  filter(Response == 'TRUE') %>%
+  count(Survey_Year, Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(Percent = n / sum(n) * 100)
+
+# Set order for visualization
+survey_long <- survey_long %>%
+  mutate(Survey_Year = factor(Survey_Year, levels = c("2010", "2015", "2020", "Unsure", "Never")))
+
+# Create horizontal bar chart
+ggplot(survey_long, aes(x = Percent, y = Survey_Year, fill = Gender)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = sprintf("%.0f%%", Percent)),
+            position = position_dodge(width = 0.9), hjust = -0.1, size = 3.5) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  scale_x_continuous(labels = scales::percent_format(scale = 1), limits = c(0, max(survey_long$Percent) + 5)) +
+  labs(
+    title = "Prior Participation in Benchmarking Surveys",
+    x = NULL,
+    y = NULL,
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    axis.text.y = element_text(size = 12),
+    panel.grid.major.y = element_blank()
+  )
+```
+
+## 6. Education Level Distribution
+
+This chart shows the educational attainment of respondents by gender.
+
+```{r education-chart, fig.cap="Educational attainment by gender"}
+# Prepare education data
+edu_data <- crew_data %>%
+  filter(gender_clean %in% c("Women", "Men"),
+         !is.na(m28A)) %>%
+  mutate(Education = case_when(
+    m28A %in% c(
+      "Graduated high school (grade 12)",
+      "Some high school or less (grades 0-11)"
+    ) ~ "Graduated high school",
+    m28A == "Technical or trade school" ~ "Technical or trade school",
+    m28A == "College/university" ~ "Graduated college",
+    m28A == "Some post-graduate study" ~ "Some post-graduate",
+    m28A == "Post-graduate degree" ~ "Post-graduate degree",
+    TRUE ~ NA_character_
+  ))
+
+# Calculate percentages
+edu_summary <- edu_data %>%
+  count(Education, Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(Percent = n / sum(n) * 100) %>%
+  ungroup()
+
+# Set education level order
+edu_levels <- c(
+  "Graduated high school",
+  "Technical or trade school",
+  "Graduated college",
+  "Some post-graduate",
+  "Post-graduate degree"
+)
+
+edu_summary <- edu_summary %>%
+  mutate(Education = factor(Education, levels = edu_levels))
+
+# Create horizontal bar chart
+ggplot(edu_summary, aes(x = Percent, y = Education, fill = Gender)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = sprintf("%.0f%%", Percent)),
+            position = position_dodge(width = 0.9), hjust = -0.1, size = 3.5) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  scale_x_continuous(labels = scales::percent_format(scale = 1), limits = c(0, 60)) +
+  labs(
+    title = "Education Level Distribution (2025)",
+    x = NULL,
+    y = NULL,
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    axis.text.y = element_text(size = 12),
+    panel.grid.major.y = element_blank()
+  )
+```
+
+## 7. Asset Class Distribution (Complete Gender Breakdown)
+
+This table shows the distribution of respondents by commercial real estate asset class, with complete gender breakdown including missing gender data.
+
+```{r asset-class-detailed}
+# First, let's analyze the gender data quality
+gender_check <- crew_data %>%
+  summarise(
+    total_responses = n(),
+    gender_clean_available = sum(!is.na(gender_clean)),
+    women = sum(gender_clean == "Women", na.rm = TRUE),
+    men = sum(gender_clean == "Men", na.rm = TRUE), 
+    nonbinary = sum(gender_clean == "Nonbinary", na.rm = TRUE),
+    gender_missing = sum(is.na(gender_clean)),
+    # Check raw gender column
+    m27_available = sum(!is.na(m27)),
+    m27_missing = sum(is.na(m27))
+  )
+
+# Calculate comprehensive asset class statistics
+calculate_asset_stats <- function(column_name) {
+  # Total respondents for this asset class
+  total_count <- sum(crew_data[[column_name]] == TRUE, na.rm = TRUE)
+  
+  # Gender breakdown for respondents in this asset class
+  asset_respondents <- crew_data %>% filter(!!sym(column_name) == TRUE)
+  
+  women_count <- sum(asset_respondents$gender_clean == "Women", na.rm = TRUE)
+  men_count <- sum(asset_respondents$gender_clean == "Men", na.rm = TRUE)
+  nonbinary_count <- sum(asset_respondents$gender_clean == "Nonbinary", na.rm = TRUE)
+  gender_missing_count <- sum(is.na(asset_respondents$gender_clean))
+  
+  # Calculate percentages
+  women_pct <- if(total_count > 0) round((women_count / total_count) * 100, 1) else 0
+  men_pct <- if(total_count > 0) round((men_count / total_count) * 100, 1) else 0
+  nonbinary_pct <- if(total_count > 0) round((nonbinary_count / total_count) * 100, 1) else 0
+  missing_pct <- if(total_count > 0) round((gender_missing_count / total_count) * 100, 1) else 0
+  
+  return(list(
+    total_count = total_count,
+    women_count = women_count,
+    men_count = men_count, 
+    nonbinary_count = nonbinary_count,
+    gender_missing_count = gender_missing_count,
+    women_pct = women_pct,
+    men_pct = men_pct,
+    nonbinary_pct = nonbinary_pct,
+    missing_pct = missing_pct
+  ))
+}
+
+# Calculate for all asset classes
+office_stats <- calculate_asset_stats("m2B[SQ001]")
+multifamily_stats <- calculate_asset_stats("m2B[SQ004]") 
+retail_stats <- calculate_asset_stats("m2B[SQ003]")
+industrial_stats <- calculate_asset_stats("m2B[SQ002]")
+mixed_stats <- calculate_asset_stats("m2B[SQ006]")
+healthcare_stats <- calculate_asset_stats("m2B[SQ007]")
+hotel_stats <- calculate_asset_stats("m2B[SQ005]")
+education_stats <- calculate_asset_stats("m2B[SQ008]")
+public_stats <- calculate_asset_stats("m2B[SQ009]")
+
+# Total survey respondents with valid gender data
+total_with_gender <- sum(!is.na(crew_data$gender_clean))
+
+# Create comprehensive summary table
+asset_detailed <- data.frame(
+  Asset_Class = c("Office", "Multifamily", "Retail", "Industrial/Manufacturing", 
+                  "Mixed-Use", "Healthcare", "Hotel/Motel", "Education", "Public Sector"),
+  Total_Respondents = c(office_stats$total_count, multifamily_stats$total_count, 
+                       retail_stats$total_count, industrial_stats$total_count,
+                       mixed_stats$total_count, healthcare_stats$total_count,
+                       hotel_stats$total_count, education_stats$total_count, 
+                       public_stats$total_count),
+  Percent_of_All = round(c(office_stats$total_count, multifamily_stats$total_count, 
+                          retail_stats$total_count, industrial_stats$total_count,
+                          mixed_stats$total_count, healthcare_stats$total_count,
+                          hotel_stats$total_count, education_stats$total_count, 
+                          public_stats$total_count) / total_with_gender * 100, 1),
+  Women_Count = c(office_stats$women_count, multifamily_stats$women_count,
+                 retail_stats$women_count, industrial_stats$women_count,
+                 mixed_stats$women_count, healthcare_stats$women_count,
+                 hotel_stats$women_count, education_stats$women_count,
+                 public_stats$women_count),
+  Women_Percent = c(office_stats$women_pct, multifamily_stats$women_pct,
+                   retail_stats$women_pct, industrial_stats$women_pct,
+                   mixed_stats$women_pct, healthcare_stats$women_pct,
+                   hotel_stats$women_pct, education_stats$women_pct,
+                   public_stats$women_pct),
+  Men_Count = c(office_stats$men_count, multifamily_stats$men_count,
+               retail_stats$men_count, industrial_stats$men_count,
+               mixed_stats$men_count, healthcare_stats$men_count,
+               hotel_stats$men_count, education_stats$men_count,
+               public_stats$men_count),
+  Men_Percent = c(office_stats$men_pct, multifamily_stats$men_pct,
+                 retail_stats$men_pct, industrial_stats$men_pct,
+                 mixed_stats$men_pct, healthcare_stats$men_pct,
+                 hotel_stats$men_pct, education_stats$men_pct,
+                 public_stats$men_pct),
+  Gender_Missing = c(office_stats$gender_missing_count, multifamily_stats$gender_missing_count,
+                    retail_stats$gender_missing_count, industrial_stats$gender_missing_count,
+                    mixed_stats$gender_missing_count, healthcare_stats$gender_missing_count,
+                    hotel_stats$gender_missing_count, education_stats$gender_missing_count,
+                    public_stats$gender_missing_count),
+  Missing_Percent = c(office_stats$missing_pct, multifamily_stats$missing_pct,
+                     retail_stats$missing_pct, industrial_stats$missing_pct,
+                     mixed_stats$missing_pct, healthcare_stats$missing_pct,
+                     hotel_stats$missing_pct, education_stats$missing_pct,
+                     public_stats$missing_pct)
+) %>%
+  arrange(desc(Total_Respondents)) %>%
+  mutate(
+    Percent_of_All = paste0(Percent_of_All, "%"),
+    Women_Percent = paste0(Women_Percent, "%"),
+    Men_Percent = paste0(Men_Percent, "%"),
+    Missing_Percent = paste0(Missing_Percent, "%")
+  )
+
+# Display the comprehensive table
+asset_detailed %>%
+  kable(
+    caption = "Respondents: Asset Class Distribution with Complete Gender Breakdown",
+    col.names = c("Asset Class", "Total Respondents", "% of All", 
+                  "Women", "% Women", "Men", "% Men", "Missing Gender", "% Missing"),
+    align = "lcccccccc"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = TRUE,
+    font_size = 11
+  ) %>%
+  column_spec(1, bold = TRUE) %>%
+  add_header_above(c(" " = 3, "Women" = 2, "Men" = 2, "Missing Gender" = 2)) %>%
+  add_footnote("Note: Respondents could indicate more than one asset class", notation = "none")
+```
+
+## 8. Specialization by Respondents
+
+This table shows the distribution of respondents by their primary area of specialization, with gender breakdown.
+
+```{r specialization-table}
+# Apply the mapping to create main categories using case_when directly
+crew_data_spec <- crew_data %>%
+  filter(!is.na(gender_clean)) %>%
+  mutate(
+    main_category = case_when(
+      # ASSET • PROPERTY • FACILITIES MANAGEMENT
+      m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management") ~ "Asset_Property_Facilities",
+      
+      # BROKERAGE • SALES • LEASING  
+      m1B %in% c("Brokerage/Sales/Leasing") ~ "Brokerage_Sales_Leasing",
+      
+      # DEVELOPMENT • DEVELOPMENT SERVICES
+      m1B %in% c("Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
+                  "Development", "Economic Development", "Engineering", "Environmental",
+                  "Interior Design", "Investments") ~ "Development_Services",
+      
+      # FINANCIAL • PROFESSIONAL SERVICES
+      m1B %in% c("Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
+                  "Finance/Lending/Mortgage", "Human Resources", "Law", 
+                  "Marketing/Business Development", "Sustainability", "Title/Escrow") ~ "Financial_Professional",
+      
+      # OTHER (including "Other" responses and anything not mapped)
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(!is.na(main_category))
+
+# Calculate summary statistics for main categories
+main_category_stats <- crew_data_spec %>%
+  count(main_category, gender_clean) %>%
+  pivot_wider(names_from = gender_clean, values_from = n, values_fill = 0) %>%
+  mutate(
+    Total = Women + Men + ifelse("Nonbinary" %in% names(.), Nonbinary, 0),
+    Women_Percent = round((Women / Total) * 100, 1),
+    Men_Percent = round((Men / Total) * 100, 1)
+  ) %>%
+  arrange(desc(Total))
+
+# Calculate detailed subcategory breakdowns for each main category
+asset_subcats <- crew_data %>%
+  filter(!is.na(gender_clean), 
+         m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management")) %>%
+  count(m1B) %>%
+  arrange(desc(n))
+
+broker_subcats <- crew_data %>%
+  filter(!is.na(gender_clean), 
+         m1B %in% c("Brokerage/Sales/Leasing")) %>%
+  count(m1B) %>%
+  arrange(desc(n))
+
+dev_subcats <- crew_data %>%
+  filter(!is.na(gender_clean), 
+         m1B %in% c("Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
+                    "Development", "Economic Development", "Engineering", "Environmental",
+                    "Interior Design", "Investments")) %>%
+  count(m1B) %>%
+  arrange(desc(n))
+
+fin_subcats <- crew_data %>%
+  filter(!is.na(gender_clean), 
+         m1B %in% c("Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
+                    "Finance/Lending/Mortgage", "Human Resources", "Law", 
+                    "Marketing/Business Development", "Sustainability", "Title/Escrow")) %>%
+  count(m1B) %>%
+  arrange(desc(n))
+
+other_subcats <- crew_data %>%
+  filter(!is.na(gender_clean), 
+         !m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management",
+                     "Brokerage/Sales/Leasing",
+                     "Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
+                     "Development", "Economic Development", "Engineering", "Environmental",
+                     "Interior Design", "Investments",
+                     "Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
+                     "Finance/Lending/Mortgage", "Human Resources", "Law", 
+                     "Marketing/Business Development", "Sustainability", "Title/Escrow") |
+         is.na(m1B)) %>%
+  count(m1B) %>%
+  arrange(desc(n))
+
+# Print formatted results
+cat("=== SPECIALIZATION BY RESPONDENTS ===\n\n")
+
+# Asset • Property • Facilities Management
+asset_stats <- main_category_stats %>% filter(main_category == "Asset_Property_Facilities")
+if (nrow(asset_stats) > 0) {
+  cat("ASSET • PROPERTY • FACILITIES MANAGEMENT\n")
+  cat("👩", asset_stats$Women_Percent, "% 👨", asset_stats$Men_Percent, "%\n")
+  for (i in 1:nrow(asset_subcats)) {
+    cat(asset_subcats$m1B[i], ".....................", asset_subcats$n[i], "\n")
+  }
+  cat("TOTAL .....................", asset_stats$Total, "\n\n")
+}
+
+# Brokerage • Sales • Leasing
+broker_stats <- main_category_stats %>% filter(main_category == "Brokerage_Sales_Leasing")
+if (nrow(broker_stats) > 0) {
+  cat("BROKERAGE • SALES • LEASING\n")
+  cat("👩", broker_stats$Women_Percent, "% 👨", broker_stats$Men_Percent, "%\n")
+  for (i in 1:nrow(broker_subcats)) {
+    cat(broker_subcats$m1B[i], ".....................", broker_subcats$n[i], "\n")
+  }
+  cat("TOTAL .....................", broker_stats$Total, "\n\n")
+}
+
+# Development • Development Services
+dev_stats <- main_category_stats %>% filter(main_category == "Development_Services")
+if (nrow(dev_stats) > 0) {
+  cat("DEVELOPMENT • DEVELOPMENT SERVICES\n")
+  cat("👩", dev_stats$Women_Percent, "% 👨", dev_stats$Men_Percent, "%\n")
+  for (i in 1:nrow(dev_subcats)) {
+    cat(dev_subcats$m1B[i], ".....................", dev_subcats$n[i], "\n")
+  }
+  cat("TOTAL .....................", dev_stats$Total, "\n\n")
+}
+
+# Financial • Professional Services
+fin_stats <- main_category_stats %>% filter(main_category == "Financial_Professional")
+if (nrow(fin_stats) > 0) {
+  cat("FINANCIAL • PROFESSIONAL SERVICES\n")
+  cat("👩", fin_stats$Women_Percent, "% 👨", fin_stats$Men_Percent, "%\n")
+  for (i in 1:nrow(fin_subcats)) {
+    cat(fin_subcats$m1B[i], ".....................", fin_subcats$n[i], "\n")
+  }
+  cat("TOTAL .....................", fin_stats$Total, "\n\n")
+}
+
+# Other
+other_stats <- main_category_stats %>% filter(main_category == "Other")
+if (nrow(other_stats) > 0) {
+  cat("OTHER\n")
+  cat("👩", other_stats$Women_Percent, "% 👨", other_stats$Men_Percent, "%\n")
+  cat("TOTAL .....................", other_stats$Total, "\n\n")
+}
+
+# Grand Total
+grand_total <- sum(main_category_stats$Total)
+cat("GRAND TOTAL .....................", grand_total, "\n\n")
+
+# Create a formatted table for display
+specialization_summary <- main_category_stats %>%
+  mutate(
+    Category = case_when(
+      main_category == "Asset_Property_Facilities" ~ "Asset • Property • Facilities Management",
+      main_category == "Brokerage_Sales_Leasing" ~ "Brokerage • Sales • Leasing", 
+      main_category == "Development_Services" ~ "Development • Development Services",
+      main_category == "Financial_Professional" ~ "Financial • Professional Services",
+      main_category == "Other" ~ "Other",
+      TRUE ~ main_category
+    ),
+    Women_Percent_Display = paste0(Women_Percent, "%"),
+    Men_Percent_Display = paste0(Men_Percent, "%")
+  ) %>%
+  select(Category, Women, Women_Percent_Display, Men, Men_Percent_Display, Total) %>%
+  arrange(desc(Total))
+
+# Display as a nice table
+specialization_summary %>%
+  kable(
+    caption = "Specialization by Respondents",
+    col.names = c("Specialization Category", "Women", "% Women", "Men", "% Men", "Total"),
+    align = "lccccc"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE
+  ) %>%
+  column_spec(1, bold = TRUE, width = "4cm") %>%
+  row_spec(0, bold = TRUE, background = "#f8f9fa")
+```
+
+## 9. Commercial Real Estate Industry - Women by Specialization Trends
+
+This visualization shows the percentage of women by specialization for 2025, historical trends, and comparison over time.
+
+```{r women-specialization-trends, fig.height=12, fig.width=10}
+# Calculate 2025 percentages by specialization (simplified categories)
+specialization_2025 <- crew_data %>%
+  filter(!is.na(gender_clean)) %>%
+  mutate(
+    specialization_simplified = case_when(
+      # Asset Management (combines Asset/Property + Corporate RE + Portfolio)
+      m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management") ~ "Asset Management",
+      
+      # Brokerage 
+      m1B %in% c("Brokerage/Sales/Leasing") ~ "Brokerage",
+      
+      # Development (combines all development-related)
+      m1B %in% c("Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
+                  "Development", "Economic Development", "Engineering", "Environmental",
+                  "Interior Design", "Investments") ~ "Development",
+      
+      # Finance (combines finance + professional services)
+      m1B %in% c("Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
+                  "Finance/Lending/Mortgage", "Human Resources", "Law", 
+                  "Marketing/Business Development", "Sustainability", "Title/Escrow") ~ "Finance",
+      
+      # Other + everything else
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(!is.na(specialization_simplified))
+
+# Calculate women percentages for 2025
+women_pct_2025 <- specialization_2025 %>%
+  count(specialization_simplified, gender_clean) %>%
+  group_by(specialization_simplified) %>%
+  mutate(
+    total = sum(n),
+    women_pct = round(ifelse(gender_clean == "Women", (n/total) * 100, 0), 0)
+  ) %>%
+  filter(gender_clean == "Women") %>%
+  select(specialization_simplified, women_pct) %>%
+  ungroup()
+
+# Add CRE Overall (total percentage of women)
+overall_women_pct <- specialization_2025 %>%
+  count(gender_clean) %>%
+  mutate(
+    total = sum(n),
+    women_pct = round(ifelse(gender_clean == "Women", (n/total) * 100, 0), 0)
+  ) %>%
+  filter(gender_clean == "Women") %>%
+  pull(women_pct)
+
+# Print 2025 results
+cat("=== 2025 RESULTS ===\n")
+cat("CRE Overall:", overall_women_pct, "%\n")
+for(i in 1:nrow(women_pct_2025)) {
+  cat(women_pct_2025$specialization_simplified[i], ":", women_pct_2025$women_pct[i], "%\n")
+}
+
+# Create complete dataset for charts
+chart_data_2025 <- women_pct_2025 %>%
+  add_row(specialization_simplified = "CRE Overall", women_pct = overall_women_pct) %>%
+  mutate(
+    specialization_simplified = factor(specialization_simplified, 
+                                     levels = c("CRE Overall", "Asset Management", "Brokerage", "Development", "Finance", "Other"))
+  ) %>%
+  arrange(specialization_simplified)
+
+```
