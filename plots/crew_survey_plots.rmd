@@ -1,5 +1,5 @@
 ---
-title: "Crew Survey First Tables"
+title: "CREW Survey 2025 - Complete Descriptive Analysis"
 author: "Marco Pena"
 date: "`r Sys.Date()`"
 output: 
@@ -16,21 +16,40 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width =
 
 # Introduction
 
-This report analyzes crew survey data across multiple demographics and characteristics, presenting findings through tables and visualizations.
+This report presents the **complete descriptive analysis** of the 2025 CREW Survey data. These are descriptive plots of the actual sample composition and **NOT WEIGHTED**. All plots are included to provide a comprehensive overview of respondent demographics and characteristics.
 
 # Data Setup and Preparation
 
 ```{r data-prep}
-# Load required libraries
 library(tidyverse)
 library(janitor)
 library(knitr)
 library(kableExtra)
 library(dplyr)
+library(stringr)
 
-# Load and clean data
 crew_data <- readRDS("crew_dataset_keys_analysis_ready.rds")
-# Create clean gender variable
+
+clean_numeric_column <- function(x) {
+  x_clean <- gsub("[^0-9.]", "", as.character(x))
+  x_numeric <- suppressWarnings(as.numeric(ifelse(x_clean == "", NA, x_clean)))
+  x_numeric[x_numeric > 99999999] <- NA
+  return(x_numeric)
+}
+
+clean_direct_reports <- function(x) {
+  x_clean <- case_when(
+    str_detect(tolower(x), "everyone|varies") ~ NA_real_,
+    str_detect(x, "^\\d+\\+?$") ~ as.numeric(str_extract(x, "\\d+")),
+    str_detect(x, "^\\d+-\\d+$") ~ as.numeric(str_extract(x, "\\d+")),
+    str_detect(tolower(x), "four") ~ 4,
+    str_detect(tolower(x), "ten") ~ 10,
+    TRUE ~ suppressWarnings(as.numeric(str_extract(x, "\\d+")))
+  )
+  x_clean[x_clean > 500] <- NA
+  return(x_clean)
+}
+
 crew_data <- crew_data %>%
   mutate(
     gender_clean = case_when(
@@ -38,24 +57,66 @@ crew_data <- crew_data %>%
       str_to_lower(m27) %in% c("male", "man") ~ "Men",
       str_detect(str_to_lower(m27), "nonbinary|non-binary") ~ "Nonbinary",
       TRUE ~ NA_character_
+    ),
+    
+    direct_reports_clean = clean_direct_reports(`G10Q78`),
+    
+    education_simplified = case_when(
+      m28A %in% c("Graduated high school (grade 12)", "Some high school or less (grades 0-11)") ~ "High School",
+      m28A == "Technical or trade school" ~ "Technical/Trade",
+      m28A == "College/university" ~ "College Graduate", 
+      m28A == "Some post-graduate study" ~ "Some Post-Graduate",
+      m28A == "Post-graduate degree" ~ "Post-Graduate Degree",
+      TRUE ~ NA_character_
+    ),
+    
+    company_size_category = case_when(
+      m8 %in% c("Just me (1)", "2-5", "6-10") ~ "Small (1-10)",
+      m8 %in% c("11-25", "26-50") ~ "Medium (11-50)",
+      m8 %in% c("51-100", "101-250") ~ "Large (51-250)", 
+      m8 %in% c("251-500", "More than 500") ~ "Very Large (250+)",
+      TRUE ~ NA_character_
+    ),
+    
+    office_hours_clean = pmin(clean_numeric_column(`HOURS[SQ001_SQ001]`), 80, na.rm = TRUE),
+    remote_hours_clean = pmin(clean_numeric_column(`HOURS[SQ002_SQ001]`), 80, na.rm = TRUE),
+    field_hours_clean = pmin(clean_numeric_column(`HOURS[SQ003_SQ001]`), 80, na.rm = TRUE)
+  ) %>%
+  mutate(
+    total_work_hours = office_hours_clean + remote_hours_clean + field_hours_clean,
+    work_arrangement = case_when(
+      is.na(total_work_hours) | total_work_hours < 5 ~ "Unknown/Invalid",
+      office_hours_clean / total_work_hours >= 0.7 ~ "Primarily Office",
+      remote_hours_clean / total_work_hours >= 0.5 ~ "Primarily Remote",
+      field_hours_clean / total_work_hours >= 0.4 ~ "Primarily Field",
+      TRUE ~ "Mixed/Hybrid"
     )
+  )
+
+crew_data <- crew_data %>%
+  rename(
+    survey_2010 = 'i0[2]',
+    survey_2015 = 'i0[3]',
+    survey_2020 = 'i0[6]',
+    survey_never = 'i0[4]',
+    survey_unsure = 'i0[5]'
   )
 ```
 
-# Analysis Results
+---
+
+# BASIC DEMOGRAPHICS & SAMPLE COMPOSITION
 
 ## 1. Gender Distribution Across Years
 
 This table shows the distribution of respondents by gender across different survey years from 2005 to 2025.
 
 ```{r gender-table}
-# Current year (2025) data
 gender_2025 <- crew_data %>%
   filter(!is.na(gender_clean)) %>%
   count(Gender = gender_clean) %>%
   mutate(Year = 2025)
 
-# Historical data
 historic <- tribble(
   ~Gender, ~`2005`, ~`2010`, ~`2015`, ~`2020`,
   "Women",    1175,    1972,    1700,    2414,
@@ -63,7 +124,6 @@ historic <- tribble(
   "Nonbinary",   0,       0,       0,       4
 )
 
-# Combine historical and current data
 gender_2025_wide <- gender_2025 %>%
   pivot_wider(names_from = Year, values_from = n) %>%
   rename(`2025` = `2025`)
@@ -72,7 +132,6 @@ gender_final <- historic %>%
   left_join(gender_2025_wide, by = "Gender") %>%
   mutate(Total = rowSums(across(where(is.numeric)), na.rm = TRUE))
 
-# Add totals row
 totals_row <- gender_final %>%
   summarise(across(where(is.numeric), sum)) %>%
   mutate(Gender = "Total") %>%
@@ -80,7 +139,6 @@ totals_row <- gender_final %>%
 
 gender_table_full <- bind_rows(gender_final, totals_row)
 
-# Display table
 gender_table_full %>%
   kable(caption = "Respondents: Gender and Year of Study", align = "c") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
@@ -121,14 +179,12 @@ location_full %>%
 This table shows the breakdown of respondents by ethnicity, race, or origin across gender categories.
 
 ```{r ethnicity-table}
-# Create ethnicity table
 ethnicity_table <- crew_data %>%
   filter(!is.na(gender_clean), !is.na(G20Q70)) %>%
   count(Ethnicity = G20Q70, Gender = gender_clean) %>%
   pivot_wider(names_from = Gender, values_from = n, values_fill = 0) %>%
   mutate(Total = rowSums(across(where(is.numeric))))
 
-# Add grand total row
 ethnicity_total <- ethnicity_table %>%
   summarise(across(where(is.numeric), sum)) %>%
   mutate(Ethnicity = "Grand Total") %>%
@@ -136,7 +192,6 @@ ethnicity_total <- ethnicity_table %>%
 
 ethnicity_full <- bind_rows(ethnicity_table, ethnicity_total)
 
-# Display table
 ethnicity_full %>%
   kable(caption = "Respondents: Ethnicity/Race/Origin", align = "c") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
@@ -149,43 +204,28 @@ ethnicity_full %>%
 This chart shows the age distribution of respondents, comparing women and men across different age groups.
 
 ```{r age-chart, fig.cap="Age distribution of survey respondents by gender"}
-# Prepare age data
 age_data <- crew_data %>%
-  filter(gender_clean %in% c("Women", "Men"),
-         !is.na(m25)) %>%
-  count(Gender = gender_clean,
-        AgeGroup = m25) %>%
+  filter(gender_clean %in% c("Women", "Men"), !is.na(m25)) %>%
+  count(Gender = gender_clean, AgeGroup = m25) %>%
   group_by(Gender) %>%
   mutate(Percent = n / sum(n) * 100)
 
-# Standardize age group order
-age_order <- c(
-  "Under 25", "25-29", "30-34", "35-39", "40-44", "45-49",
-  "50-54", "55-59", "60-64", "65 or older"
-)
+age_order <- c("Under 25", "25-29", "30-34", "35-39", "40-44", "45-49",
+               "50-54", "55-59", "60-64", "65 or older")
 
 age_data <- age_data %>%
   mutate(AgeGroup = factor(AgeGroup, levels = age_order))
 
-# Create age distribution chart
 ggplot(age_data, aes(x = AgeGroup, y = Percent, fill = Gender)) +
   geom_col(position = "dodge") +
   geom_text(aes(label = sprintf("%.1f%%", Percent)),
             position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
   scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0, 17)) +
   scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
-  labs(
-    title = "Respondents: Age Distribution",
-    x = NULL,
-    y = NULL,
-    fill = NULL
-  ) +
+  labs(title = "Respondents: Age Distribution", x = NULL, y = NULL, fill = NULL) +
   theme_minimal(base_size = 12) +
-  theme(
-    legend.position = "top",
-    axis.text.x = element_text(angle = 0, hjust = 0.5),
-    panel.grid.major.x = element_blank()
-  )
+  theme(legend.position = "top", axis.text.x = element_text(angle = 0, hjust = 0.5),
+        panel.grid.major.x = element_blank())
 ```
 
 ## 5. Prior Survey Participation
@@ -193,49 +233,36 @@ ggplot(age_data, aes(x = AgeGroup, y = Percent, fill = Gender)) +
 This chart displays the participation history of respondents in previous benchmarking surveys.
 
 ```{r survey-participation, fig.cap="Prior participation in benchmarking surveys by gender"}
-# Rename columns for clarity
-crew_data <- crew_data %>%
-  rename(
-    `2010` = 'i0[2]',
-    `2015` = 'i0[3]',
-    `2020` = 'i0[6]',
-    `Never` = 'i0[4]',
-    `Unsure` = 'i0[5]'
-  )
-
-# Prepare survey participation data
 survey_long <- crew_data %>%
   filter(gender_clean %in% c("Women", "Men")) %>%
-  pivot_longer(cols = c(`2010`, `2015`, `2020`, `Never`, `Unsure`),
+  pivot_longer(cols = c(survey_2010, survey_2015, survey_2020, survey_never, survey_unsure),
                names_to = "Survey_Year", values_to = "Response") %>%
-  filter(Response == 'TRUE') %>%
+  filter(Response == TRUE) %>%
+  mutate(Survey_Year = case_when(
+    Survey_Year == "survey_2010" ~ "2010",
+    Survey_Year == "survey_2015" ~ "2015", 
+    Survey_Year == "survey_2020" ~ "2020",
+    Survey_Year == "survey_never" ~ "Never",
+    Survey_Year == "survey_unsure" ~ "Unsure"
+  )) %>%
   count(Survey_Year, Gender = gender_clean) %>%
   group_by(Gender) %>%
   mutate(Percent = n / sum(n) * 100)
 
-# Set order for visualization
 survey_long <- survey_long %>%
   mutate(Survey_Year = factor(Survey_Year, levels = c("2010", "2015", "2020", "Unsure", "Never")))
 
-# Create horizontal bar chart
 ggplot(survey_long, aes(x = Percent, y = Survey_Year, fill = Gender)) +
   geom_col(position = "dodge") +
   geom_text(aes(label = sprintf("%.0f%%", Percent)),
             position = position_dodge(width = 0.9), hjust = -0.1, size = 3.5) +
   scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
-  scale_x_continuous(labels = scales::percent_format(scale = 1), limits = c(0, max(survey_long$Percent) + 5)) +
-  labs(
-    title = "Prior Participation in Benchmarking Surveys",
-    x = NULL,
-    y = NULL,
-    fill = NULL
-  ) +
+  scale_x_continuous(labels = scales::percent_format(scale = 1), 
+                     limits = c(0, max(survey_long$Percent) + 5)) +
+  labs(title = "Prior Participation in Benchmarking Surveys", x = NULL, y = NULL, fill = NULL) +
   theme_minimal(base_size = 12) +
-  theme(
-    legend.position = "top",
-    axis.text.y = element_text(size = 12),
-    panel.grid.major.y = element_blank()
-  )
+  theme(legend.position = "top", axis.text.y = element_text(size = 12),
+        panel.grid.major.y = element_blank())
 ```
 
 ## 6. Education Level Distribution
@@ -243,114 +270,308 @@ ggplot(survey_long, aes(x = Percent, y = Survey_Year, fill = Gender)) +
 This chart shows the educational attainment of respondents by gender.
 
 ```{r education-chart, fig.cap="Educational attainment by gender"}
-# Prepare education data
 edu_data <- crew_data %>%
-  filter(gender_clean %in% c("Women", "Men"),
-         !is.na(m28A)) %>%
-  mutate(Education = case_when(
-    m28A %in% c(
-      "Graduated high school (grade 12)",
-      "Some high school or less (grades 0-11)"
-    ) ~ "Graduated high school",
-    m28A == "Technical or trade school" ~ "Technical or trade school",
-    m28A == "College/university" ~ "Graduated college",
-    m28A == "Some post-graduate study" ~ "Some post-graduate",
-    m28A == "Post-graduate degree" ~ "Post-graduate degree",
-    TRUE ~ NA_character_
-  ))
-
-# Calculate percentages
-edu_summary <- edu_data %>%
-  count(Education, Gender = gender_clean) %>%
+  filter(gender_clean %in% c("Women", "Men"), !is.na(education_simplified)) %>%
+  count(Education = education_simplified, Gender = gender_clean) %>%
   group_by(Gender) %>%
   mutate(Percent = n / sum(n) * 100) %>%
   ungroup()
 
-# Set education level order
-edu_levels <- c(
-  "Graduated high school",
-  "Technical or trade school",
-  "Graduated college",
-  "Some post-graduate",
-  "Post-graduate degree"
-)
+edu_levels <- c("High School", "Technical/Trade", "College Graduate", 
+                "Some Post-Graduate", "Post-Graduate Degree")
 
-edu_summary <- edu_summary %>%
+edu_data <- edu_data %>%
   mutate(Education = factor(Education, levels = edu_levels))
 
-# Create horizontal bar chart
-ggplot(edu_summary, aes(x = Percent, y = Education, fill = Gender)) +
+ggplot(edu_data, aes(x = Percent, y = Education, fill = Gender)) +
   geom_col(position = "dodge") +
   geom_text(aes(label = sprintf("%.0f%%", Percent)),
             position = position_dodge(width = 0.9), hjust = -0.1, size = 3.5) +
   scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
   scale_x_continuous(labels = scales::percent_format(scale = 1), limits = c(0, 60)) +
-  labs(
-    title = "Education Level Distribution (2025)",
-    x = NULL,
-    y = NULL,
-    fill = NULL
-  ) +
+  labs(title = "Education Level Distribution", x = NULL, y = NULL, fill = NULL) +
   theme_minimal(base_size = 12) +
-  theme(
-    legend.position = "top",
-    axis.text.y = element_text(size = 12),
-    panel.grid.major.y = element_blank()
-  )
+  theme(legend.position = "top", axis.text.y = element_text(size = 12),
+        panel.grid.major.y = element_blank())
 ```
 
-## 7. Asset Class Distribution (Complete Gender Breakdown)
+## 7. Years of Experience in CRE
 
-This table shows the distribution of respondents by commercial real estate asset class, with complete gender breakdown including missing gender data.
+```{r experience-complete, echo=TRUE, warning=FALSE, message=FALSE, fig.width=10, fig.height=6}
+
+exp_data_complete <- crew_data %>%
+  filter(!is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+  mutate(
+    years_experience = case_when(
+      m4A == "Less than one year" ~ 0.5,
+      m4A == "Other" & !is.na(`m4A[other]`) ~ as.numeric(`m4A[other]`),
+      TRUE ~ NA_real_
+    ),
+    
+    exp_category = case_when(
+      years_experience < 1 ~ "Less than 1 year",
+      years_experience >= 1 & years_experience <= 2 ~ "1-2 years",
+      years_experience > 2 & years_experience <= 5 ~ "3-5 years", 
+      years_experience > 5 & years_experience <= 10 ~ "6-10 years",
+      years_experience > 10 & years_experience <= 15 ~ "11-15 years",
+      years_experience > 15 & years_experience <= 20 ~ "16-20 years",
+      years_experience > 20 & years_experience <= 25 ~ "21-25 years",
+      years_experience > 25 & years_experience <= 30 ~ "26-30 years",
+      years_experience > 30 ~ "More than 30 years",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(exp_category)) %>%
+  count(Gender = gender_clean, Experience = exp_category)
+
+if(nrow(exp_data_complete) > 0) {
+  exp_data_complete <- exp_data_complete %>%
+    group_by(Gender) %>%
+    mutate(
+      Percent = n / sum(n) * 100,
+      Total_by_Gender = sum(n)
+    ) %>%
+    ungroup()
+  
+  exp_order <- c("Less than 1 year", "1-2 years", "3-5 years", "6-10 years", 
+                 "11-15 years", "16-20 years", "21-25 years", "26-30 years", "More than 30 years")
+  
+  exp_data_complete <- exp_data_complete %>%
+    mutate(Experience = factor(Experience, levels = exp_order))
+  
+  exp_plot_detailed <- ggplot(exp_data_complete, aes(x = Experience, y = Percent, fill = Gender)) +
+    geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+    geom_text(aes(label = sprintf("%.1f%%", Percent)),
+              position = position_dodge(width = 0.8), vjust = -0.5, size = 2.8) +
+    scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+    scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+    labs(
+      title = "Years of Experience in Commercial Real Estate (Detailed)",
+      subtitle = paste0("Total respondents: ", sum(exp_data_complete$n)),
+      x = "Years of Experience", 
+      y = "Percentage of Respondents", 
+      fill = NULL
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      legend.position = "top",
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 11, color = "gray60"),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank()
+    )
+  
+  print(exp_plot_detailed)
+  
+  exp_data_simplified <- crew_data %>%
+    filter(!is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+    mutate(
+      years_experience = case_when(
+        m4A == "Less than one year" ~ 0.5,
+        m4A == "Other" & !is.na(`m4A[other]`) ~ as.numeric(`m4A[other]`),
+        TRUE ~ NA_real_
+      ),
+      exp_simplified = case_when(
+        years_experience <= 5 ~ "5 or less",
+        years_experience > 5 & years_experience <= 10 ~ "6-10",
+        years_experience > 10 & years_experience <= 20 ~ "11-20", 
+        years_experience > 20 ~ "20+",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    filter(!is.na(exp_simplified)) %>%
+    count(Gender = gender_clean, Experience = exp_simplified) %>%
+    group_by(Gender) %>%
+    mutate(Percent = n / sum(n) * 100) %>%
+    ungroup()
+  
+  exp_simple_order <- c("5 or less", "6-10", "11-20", "20+")
+  exp_data_simplified <- exp_data_simplified %>%
+    mutate(Experience = factor(Experience, levels = exp_simple_order))
+  
+  exp_plot_simplified <- ggplot(exp_data_simplified, aes(x = Experience, y = Percent, fill = Gender)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.7, alpha = 0.9) +
+    geom_text(aes(label = sprintf("%.1f%%\n(n=%d)", Percent, n)),
+              position = position_dodge(width = 0.8), vjust = -0.5, size = 3.2) +
+    scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+    scale_y_continuous(labels = scales::percent_format(scale = 1), 
+                       limits = c(0, max(exp_data_simplified$Percent, na.rm = TRUE) * 1.15)) +
+    labs(
+      title = "Years of Experience in Commercial Real Estate",
+      subtitle = paste0("Total respondents: ", sum(exp_data_simplified$n)),
+      x = "Years of Experience", 
+      y = "Percentage of Respondents", 
+      fill = NULL
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "top",
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 11, color = "gray60"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank()
+    )
+  
+  print(exp_plot_simplified)
+  
+  exp_summary <- exp_data_simplified %>%
+    group_by(Experience) %>%
+    summarise(
+      Women = sum(n[Gender == "Women"], na.rm = TRUE),
+      Men = sum(n[Gender == "Men"], na.rm = TRUE),
+      Total = sum(n),
+      Percent_Women = round(Women / Total * 100, 1),
+      .groups = 'drop'
+    )
+  
+  exp_summary %>%
+    kable(
+      caption = "Years of Experience Distribution Summary",
+      col.names = c("Experience", "Women", "Men", "Total", "% Women"),
+      align = "lcccc"
+    ) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+  
+  cat("\nExperience Statistics:\n")
+  exp_stats <- crew_data %>%
+    filter(!is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+    mutate(
+      years_experience = case_when(
+        m4A == "Less than one year" ~ 0.5,
+        m4A == "Other" & !is.na(`m4A[other]`) ~ as.numeric(`m4A[other]`),
+        TRUE ~ NA_real_
+      )
+    ) %>%
+    filter(!is.na(years_experience)) %>%
+    group_by(Gender = gender_clean) %>%
+    summarise(
+      Count = n(),
+      Mean_Years = round(mean(years_experience), 1),
+      Median_Years = round(median(years_experience), 1),
+      Min_Years = min(years_experience),
+      Max_Years = max(years_experience),
+      .groups = 'drop'
+    )
+  
+  print(exp_stats)
+  
+} else {
+  cat("No valid experience data found\n")
+}
+```
+
+# INDUSTRY & ROLE STRUCTURE
+
+## 8. Company Primary Industry Distribution
+
+```{r industry-distribution}
+industry_data <- crew_data %>%
+  filter(!is.na(m1A), !is.na(gender_clean)) %>%
+  count(Industry = m1A, Gender = gender_clean) %>%
+  group_by(Industry) %>%
+  mutate(Total = sum(n)) %>%
+  ungroup() %>%
+  filter(Total >= 10) %>%  # Only show industries with 10+ responses
+  pivot_wider(names_from = Gender, values_from = n, values_fill = 0) %>%
+  mutate(
+    Total = Women + Men + ifelse("Nonbinary" %in% names(.), Nonbinary, 0),
+    Percent_of_Sample = round((Total / sum(Total)) * 100, 1)
+  ) %>%
+  arrange(desc(Total))
+
+industry_data %>%
+  select(Industry, Women, Men, Total, Percent_of_Sample) %>%
+  kable(
+    caption = "Company Primary Industry Distribution", 
+    col.names = c("Industry", "Women", "Men", "Total", "% of Sample"),
+    align = "lcccc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## 9. Specialization Distribution
+
+```{r specialization-breakdown}
+crew_data_spec <- crew_data %>%
+  filter(!is.na(gender_clean)) %>%
+  mutate(
+    main_category = case_when(
+      m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management") ~ "Asset_Property_Facilities",
+      m1B %in% c("Brokerage/Sales/Leasing") ~ "Brokerage_Sales_Leasing",
+      m1B %in% c("Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
+                  "Development", "Economic Development", "Engineering", "Environmental",
+                  "Interior Design", "Investments") ~ "Development_Services",
+      m1B %in% c("Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
+                  "Finance/Lending/Mortgage", "Human Resources", "Law", 
+                  "Marketing/Business Development", "Sustainability", "Title/Escrow") ~ "Financial_Professional",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(!is.na(main_category))
+
+main_category_stats <- crew_data_spec %>%
+  count(main_category, gender_clean) %>%
+  pivot_wider(names_from = gender_clean, values_from = n, values_fill = 0) %>%
+  mutate(
+    Total = Women + Men + ifelse("Nonbinary" %in% names(.), Nonbinary, 0),
+    Women_Percent = round((Women / Total) * 100, 1),
+    Men_Percent = round((Men / Total) * 100, 1)
+  ) %>%
+  arrange(desc(Total))
+
+specialization_summary <- main_category_stats %>%
+  mutate(
+    Category = case_when(
+      main_category == "Asset_Property_Facilities" ~ "Asset • Property • Facilities Management",
+      main_category == "Brokerage_Sales_Leasing" ~ "Brokerage • Sales • Leasing", 
+      main_category == "Development_Services" ~ "Development • Development Services",
+      main_category == "Financial_Professional" ~ "Financial • Professional Services",
+      main_category == "Other" ~ "Other",
+      TRUE ~ main_category
+    ),
+    Women_Percent_Display = paste0(Women_Percent, "%"),
+    Men_Percent_Display = paste0(Men_Percent, "%")
+  ) %>%
+  select(Category, Women, Women_Percent_Display, Men, Men_Percent_Display, Total) %>%
+  arrange(desc(Total))
+
+specialization_summary %>%
+  kable(
+    caption = "Specialization by Respondents",
+    col.names = c("Specialization Category", "Women", "% Women", "Men", "% Men", "Total"),
+    align = "lccccc"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE
+  ) %>%
+  column_spec(1, bold = TRUE, width = "4cm") %>%
+  row_spec(0, bold = TRUE, background = "#f8f9fa")
+```
+
+## 10. Asset Class Distribution
 
 ```{r asset-class-detailed}
-# First, let's analyze the gender data quality
-gender_check <- crew_data %>%
-  summarise(
-    total_responses = n(),
-    gender_clean_available = sum(!is.na(gender_clean)),
-    women = sum(gender_clean == "Women", na.rm = TRUE),
-    men = sum(gender_clean == "Men", na.rm = TRUE), 
-    nonbinary = sum(gender_clean == "Nonbinary", na.rm = TRUE),
-    gender_missing = sum(is.na(gender_clean)),
-    # Check raw gender column
-    m27_available = sum(!is.na(m27)),
-    m27_missing = sum(is.na(m27))
-  )
-
-# Calculate comprehensive asset class statistics
 calculate_asset_stats <- function(column_name) {
-  # Total respondents for this asset class
   total_count <- sum(crew_data[[column_name]] == TRUE, na.rm = TRUE)
-  
-  # Gender breakdown for respondents in this asset class
   asset_respondents <- crew_data %>% filter(!!sym(column_name) == TRUE)
   
   women_count <- sum(asset_respondents$gender_clean == "Women", na.rm = TRUE)
   men_count <- sum(asset_respondents$gender_clean == "Men", na.rm = TRUE)
-  nonbinary_count <- sum(asset_respondents$gender_clean == "Nonbinary", na.rm = TRUE)
-  gender_missing_count <- sum(is.na(asset_respondents$gender_clean))
   
-  # Calculate percentages
   women_pct <- if(total_count > 0) round((women_count / total_count) * 100, 1) else 0
   men_pct <- if(total_count > 0) round((men_count / total_count) * 100, 1) else 0
-  nonbinary_pct <- if(total_count > 0) round((nonbinary_count / total_count) * 100, 1) else 0
-  missing_pct <- if(total_count > 0) round((gender_missing_count / total_count) * 100, 1) else 0
   
   return(list(
     total_count = total_count,
     women_count = women_count,
     men_count = men_count, 
-    nonbinary_count = nonbinary_count,
-    gender_missing_count = gender_missing_count,
     women_pct = women_pct,
-    men_pct = men_pct,
-    nonbinary_pct = nonbinary_pct,
-    missing_pct = missing_pct
+    men_pct = men_pct
   ))
 }
 
-# Calculate for all asset classes
 office_stats <- calculate_asset_stats("m2B[SQ001]")
 multifamily_stats <- calculate_asset_stats("m2B[SQ004]") 
 retail_stats <- calculate_asset_stats("m2B[SQ003]")
@@ -361,10 +582,6 @@ hotel_stats <- calculate_asset_stats("m2B[SQ005]")
 education_stats <- calculate_asset_stats("m2B[SQ008]")
 public_stats <- calculate_asset_stats("m2B[SQ009]")
 
-# Total survey respondents with valid gender data
-total_with_gender <- sum(!is.na(crew_data$gender_clean))
-
-# Create comprehensive summary table
 asset_detailed <- data.frame(
   Asset_Class = c("Office", "Multifamily", "Retail", "Industrial/Manufacturing", 
                   "Mixed-Use", "Healthcare", "Hotel/Motel", "Education", "Public Sector"),
@@ -373,11 +590,6 @@ asset_detailed <- data.frame(
                        mixed_stats$total_count, healthcare_stats$total_count,
                        hotel_stats$total_count, education_stats$total_count, 
                        public_stats$total_count),
-  Percent_of_All = round(c(office_stats$total_count, multifamily_stats$total_count, 
-                          retail_stats$total_count, industrial_stats$total_count,
-                          mixed_stats$total_count, healthcare_stats$total_count,
-                          hotel_stats$total_count, education_stats$total_count, 
-                          public_stats$total_count) / total_with_gender * 100, 1),
   Women_Count = c(office_stats$women_count, multifamily_stats$women_count,
                  retail_stats$women_count, industrial_stats$women_count,
                  mixed_stats$women_count, healthcare_stats$women_count,
@@ -397,289 +609,896 @@ asset_detailed <- data.frame(
                  retail_stats$men_pct, industrial_stats$men_pct,
                  mixed_stats$men_pct, healthcare_stats$men_pct,
                  hotel_stats$men_pct, education_stats$men_pct,
-                 public_stats$men_pct),
-  Gender_Missing = c(office_stats$gender_missing_count, multifamily_stats$gender_missing_count,
-                    retail_stats$gender_missing_count, industrial_stats$gender_missing_count,
-                    mixed_stats$gender_missing_count, healthcare_stats$gender_missing_count,
-                    hotel_stats$gender_missing_count, education_stats$gender_missing_count,
-                    public_stats$gender_missing_count),
-  Missing_Percent = c(office_stats$missing_pct, multifamily_stats$missing_pct,
-                     retail_stats$missing_pct, industrial_stats$missing_pct,
-                     mixed_stats$missing_pct, healthcare_stats$missing_pct,
-                     hotel_stats$missing_pct, education_stats$missing_pct,
-                     public_stats$missing_pct)
+                 public_stats$men_pct)
 ) %>%
   arrange(desc(Total_Respondents)) %>%
   mutate(
-    Percent_of_All = paste0(Percent_of_All, "%"),
     Women_Percent = paste0(Women_Percent, "%"),
-    Men_Percent = paste0(Men_Percent, "%"),
-    Missing_Percent = paste0(Missing_Percent, "%")
+    Men_Percent = paste0(Men_Percent, "%")
   )
 
-# Display the comprehensive table
 asset_detailed %>%
   kable(
-    caption = "Respondents: Asset Class Distribution with Complete Gender Breakdown",
-    col.names = c("Asset Class", "Total Respondents", "% of All", 
-                  "Women", "% Women", "Men", "% Men", "Missing Gender", "% Missing"),
-    align = "lcccccccc"
+    caption = "Respondents: Asset Class Distribution with Gender Breakdown",
+    col.names = c("Asset Class", "Total", "Women", "% Women", "Men", "% Men"),
+    align = "lcccccc"
   ) %>%
   kable_styling(
     bootstrap_options = c("striped", "hover", "condensed", "responsive"),
-    full_width = TRUE,
-    font_size = 11
+    full_width = TRUE
   ) %>%
   column_spec(1, bold = TRUE) %>%
-  add_header_above(c(" " = 3, "Women" = 2, "Men" = 2, "Missing Gender" = 2)) %>%
+  add_header_above(c(" " = 2, "Women" = 2, "Men" = 2)) %>%
   add_footnote("Note: Respondents could indicate more than one asset class", notation = "none")
 ```
 
-## 8. Specialization by Respondents
+## 11. Current Position Levels
 
-This table shows the distribution of respondents by their primary area of specialization, with gender breakdown.
-
-```{r specialization-table}
-# Apply the mapping to create main categories using case_when directly
-crew_data_spec <- crew_data %>%
-  filter(!is.na(gender_clean)) %>%
-  mutate(
-    main_category = case_when(
-      # ASSET • PROPERTY • FACILITIES MANAGEMENT
-      m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management") ~ "Asset_Property_Facilities",
-      
-      # BROKERAGE • SALES • LEASING  
-      m1B %in% c("Brokerage/Sales/Leasing") ~ "Brokerage_Sales_Leasing",
-      
-      # DEVELOPMENT • DEVELOPMENT SERVICES
-      m1B %in% c("Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
-                  "Development", "Economic Development", "Engineering", "Environmental",
-                  "Interior Design", "Investments") ~ "Development_Services",
-      
-      # FINANCIAL • PROFESSIONAL SERVICES
-      m1B %in% c("Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
-                  "Finance/Lending/Mortgage", "Human Resources", "Law", 
-                  "Marketing/Business Development", "Sustainability", "Title/Escrow") ~ "Financial_Professional",
-      
-      # OTHER (including "Other" responses and anything not mapped)
-      TRUE ~ "Other"
-    )
-  ) %>%
-  filter(!is.na(main_category))
-
-# Calculate summary statistics for main categories
-main_category_stats <- crew_data_spec %>%
-  count(main_category, gender_clean) %>%
-  pivot_wider(names_from = gender_clean, values_from = n, values_fill = 0) %>%
+```{r position-levels}
+position_data <- crew_data %>%
+  filter(!is.na(m3A), !is.na(gender_clean)) %>%
+  count(Position = m3A, Gender = gender_clean) %>%
+  pivot_wider(names_from = Gender, values_from = n, values_fill = 0) %>%
   mutate(
     Total = Women + Men + ifelse("Nonbinary" %in% names(.), Nonbinary, 0),
-    Women_Percent = round((Women / Total) * 100, 1),
-    Men_Percent = round((Men / Total) * 100, 1)
+    Women_Pct = round((Women / Total) * 100, 1),
+    Men_Pct = round((Men / Total) * 100, 1)
   ) %>%
   arrange(desc(Total))
 
-# Calculate detailed subcategory breakdowns for each main category
-asset_subcats <- crew_data %>%
-  filter(!is.na(gender_clean), 
-         m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management")) %>%
-  count(m1B) %>%
-  arrange(desc(n))
-
-broker_subcats <- crew_data %>%
-  filter(!is.na(gender_clean), 
-         m1B %in% c("Brokerage/Sales/Leasing")) %>%
-  count(m1B) %>%
-  arrange(desc(n))
-
-dev_subcats <- crew_data %>%
-  filter(!is.na(gender_clean), 
-         m1B %in% c("Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
-                    "Development", "Economic Development", "Engineering", "Environmental",
-                    "Interior Design", "Investments")) %>%
-  count(m1B) %>%
-  arrange(desc(n))
-
-fin_subcats <- crew_data %>%
-  filter(!is.na(gender_clean), 
-         m1B %in% c("Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
-                    "Finance/Lending/Mortgage", "Human Resources", "Law", 
-                    "Marketing/Business Development", "Sustainability", "Title/Escrow")) %>%
-  count(m1B) %>%
-  arrange(desc(n))
-
-other_subcats <- crew_data %>%
-  filter(!is.na(gender_clean), 
-         !m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management",
-                     "Brokerage/Sales/Leasing",
-                     "Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
-                     "Development", "Economic Development", "Engineering", "Environmental",
-                     "Interior Design", "Investments",
-                     "Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
-                     "Finance/Lending/Mortgage", "Human Resources", "Law", 
-                     "Marketing/Business Development", "Sustainability", "Title/Escrow") |
-         is.na(m1B)) %>%
-  count(m1B) %>%
-  arrange(desc(n))
-
-# Print formatted results
-cat("=== SPECIALIZATION BY RESPONDENTS ===\n\n")
-
-# Asset • Property • Facilities Management
-asset_stats <- main_category_stats %>% filter(main_category == "Asset_Property_Facilities")
-if (nrow(asset_stats) > 0) {
-  cat("ASSET • PROPERTY • FACILITIES MANAGEMENT\n")
-  cat("👩", asset_stats$Women_Percent, "% 👨", asset_stats$Men_Percent, "%\n")
-  for (i in 1:nrow(asset_subcats)) {
-    cat(asset_subcats$m1B[i], ".....................", asset_subcats$n[i], "\n")
-  }
-  cat("TOTAL .....................", asset_stats$Total, "\n\n")
-}
-
-# Brokerage • Sales • Leasing
-broker_stats <- main_category_stats %>% filter(main_category == "Brokerage_Sales_Leasing")
-if (nrow(broker_stats) > 0) {
-  cat("BROKERAGE • SALES • LEASING\n")
-  cat("👩", broker_stats$Women_Percent, "% 👨", broker_stats$Men_Percent, "%\n")
-  for (i in 1:nrow(broker_subcats)) {
-    cat(broker_subcats$m1B[i], ".....................", broker_subcats$n[i], "\n")
-  }
-  cat("TOTAL .....................", broker_stats$Total, "\n\n")
-}
-
-# Development • Development Services
-dev_stats <- main_category_stats %>% filter(main_category == "Development_Services")
-if (nrow(dev_stats) > 0) {
-  cat("DEVELOPMENT • DEVELOPMENT SERVICES\n")
-  cat("👩", dev_stats$Women_Percent, "% 👨", dev_stats$Men_Percent, "%\n")
-  for (i in 1:nrow(dev_subcats)) {
-    cat(dev_subcats$m1B[i], ".....................", dev_subcats$n[i], "\n")
-  }
-  cat("TOTAL .....................", dev_stats$Total, "\n\n")
-}
-
-# Financial • Professional Services
-fin_stats <- main_category_stats %>% filter(main_category == "Financial_Professional")
-if (nrow(fin_stats) > 0) {
-  cat("FINANCIAL • PROFESSIONAL SERVICES\n")
-  cat("👩", fin_stats$Women_Percent, "% 👨", fin_stats$Men_Percent, "%\n")
-  for (i in 1:nrow(fin_subcats)) {
-    cat(fin_subcats$m1B[i], ".....................", fin_subcats$n[i], "\n")
-  }
-  cat("TOTAL .....................", fin_stats$Total, "\n\n")
-}
-
-# Other
-other_stats <- main_category_stats %>% filter(main_category == "Other")
-if (nrow(other_stats) > 0) {
-  cat("OTHER\n")
-  cat("👩", other_stats$Women_Percent, "% 👨", other_stats$Men_Percent, "%\n")
-  cat("TOTAL .....................", other_stats$Total, "\n\n")
-}
-
-# Grand Total
-grand_total <- sum(main_category_stats$Total)
-cat("GRAND TOTAL .....................", grand_total, "\n\n")
-
-# Create a formatted table for display
-specialization_summary <- main_category_stats %>%
-  mutate(
-    Category = case_when(
-      main_category == "Asset_Property_Facilities" ~ "Asset • Property • Facilities Management",
-      main_category == "Brokerage_Sales_Leasing" ~ "Brokerage • Sales • Leasing", 
-      main_category == "Development_Services" ~ "Development • Development Services",
-      main_category == "Financial_Professional" ~ "Financial • Professional Services",
-      main_category == "Other" ~ "Other",
-      TRUE ~ main_category
-    ),
-    Women_Percent_Display = paste0(Women_Percent, "%"),
-    Men_Percent_Display = paste0(Men_Percent, "%")
-  ) %>%
-  select(Category, Women, Women_Percent_Display, Men, Men_Percent_Display, Total) %>%
-  arrange(desc(Total))
-
-# Display as a nice table
-specialization_summary %>%
+position_data %>%
+  select(Position, Women, Men, Total, Women_Pct, Men_Pct) %>%
   kable(
-    caption = "Specialization by Respondents",
-    col.names = c("Specialization Category", "Women", "% Women", "Men", "% Men", "Total"),
+    caption = "Current Position Distribution",
+    col.names = c("Position Level", "Women", "Men", "Total", "% Women", "% Men"),
     align = "lccccc"
   ) %>%
-  kable_styling(
-    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
-    full_width = FALSE
-  ) %>%
-  column_spec(1, bold = TRUE, width = "4cm") %>%
-  row_spec(0, bold = TRUE, background = "#f8f9fa")
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
 ```
 
-## 9. Commercial Real Estate Industry - Women by Specialization Trends
+## 12. Employment Status
 
-This visualization shows the percentage of women by specialization for 2025, historical trends, and comparison over time.
-
-```{r women-specialization-trends, fig.height=12, fig.width=10}
-# Calculate 2025 percentages by specialization (simplified categories)
-specialization_2025 <- crew_data %>%
-  filter(!is.na(gender_clean)) %>%
+```{r employment-status-improved, fig.cap="Current employment status distribution", fig.width=10, fig.height=6}
+employment_detailed <- crew_data %>%
+  filter(!is.na(i2), !is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+  count(Employment_Status = ifelse(i2, "Employed", "Not Employed"), Gender = gender_clean) %>%
+  group_by(Employment_Status) %>%
   mutate(
-    specialization_simplified = case_when(
-      # Asset Management (combines Asset/Property + Corporate RE + Portfolio)
-      m1B %in% c("Asset/Property Management", "Corporate Real Estate", "Portfolio Management") ~ "Asset Management",
-      
-      # Brokerage 
-      m1B %in% c("Brokerage/Sales/Leasing") ~ "Brokerage",
-      
-      # Development (combines all development-related)
-      m1B %in% c("Acquisitions/ Dispositions", "Architecture and Design", "Construction", 
-                  "Development", "Economic Development", "Engineering", "Environmental",
-                  "Interior Design", "Investments") ~ "Development",
-      
-      # Finance (combines finance + professional services)
-      m1B %in% c("Accounting", "Appraisal/Valuation", "Consulting", "Executive Management",
-                  "Finance/Lending/Mortgage", "Human Resources", "Law", 
-                  "Marketing/Business Development", "Sustainability", "Title/Escrow") ~ "Finance",
-      
-      # Other + everything else
+    Total = sum(n),
+    Percent_within_status = n / Total * 100
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Overall_percent = Total / sum(unique(Total)) * 100
+  ) %>%
+  arrange(desc(Total))
+
+ggplot(employment_detailed, aes(x = reorder(Employment_Status, Total), y = n, fill = Gender)) +
+  geom_col(position = "stack", alpha = 0.9) +
+  geom_text(data = employment_detailed %>% 
+              group_by(Employment_Status) %>% 
+              summarise(Total = sum(n), .groups = 'drop'),
+            aes(x = Employment_Status, y = Total, label = paste0("n=", Total)),
+            inherit.aes = FALSE, hjust = -0.1, size = 3.5) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  coord_flip() +
+  labs(
+    title = "Current Employment Status by Gender",
+    subtitle = paste0("Total respondents: ", sum(employment_detailed$n)),
+    x = NULL, 
+    y = "Number of Respondents",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray60"),
+    panel.grid.major.y = element_blank()
+  )
+
+employment_summary_table <- employment_detailed %>%
+  group_by(Employment_Status) %>%
+  summarise(
+    Women = sum(n[Gender == "Women"], na.rm = TRUE),
+    Men = sum(n[Gender == "Men"], na.rm = TRUE),
+    Total = sum(n),
+    Percent_of_Total = round(Total / sum(employment_detailed$n) * 100, 1),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(Total))
+
+employment_summary_table %>%
+  kable(
+    caption = "Employment Status Breakdown by Gender",
+    col.names = c("Employment Status", "Women", "Men", "Total", "% of Sample"),
+    align = "lcccc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+
+## 13. Company Revenue Distribution
+
+```{r company-revenue, fig.cap="Company annual revenue distribution"}
+revenue_data <- crew_data %>%
+  filter(!is.na(m29)) %>%
+  count(Revenue = m29) %>%
+  mutate(Percent = round((n / sum(n)) * 100, 1)) %>%
+  arrange(desc(n))
+
+ggplot(revenue_data, aes(x = reorder(Revenue, n), y = n)) +
+  geom_col(fill = "#8e44ad") +
+  geom_text(aes(label = paste0(n, " (", Percent, "%)")), 
+            hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = "Company Annual Revenue Distribution", x = "Annual Revenue", y = "Number of Respondents") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 9))
+```
+
+## 14. Company Type Distribution
+
+```{r company-type}
+company_type_data <- crew_data %>%
+  filter(!is.na(m30A)) %>%
+  count(Company_Type = m30A) %>%
+  mutate(Percent = round((n / sum(n)) * 100, 1)) %>%
+  arrange(desc(n))
+
+company_type_data %>%
+  kable(
+    caption = "Company Type Distribution",
+    col.names = c("Company Type", "Count", "Percentage"),
+    align = "lcc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## 15. Ownership Structure
+
+```{r ownership-structure}
+ownership_data <- crew_data %>%
+  filter(!is.na(m30B)) %>%
+  count(Ownership = m30B) %>%
+  mutate(Percent = round((n / sum(n)) * 100, 1)) %>%
+  arrange(desc(n))
+
+ownership_data %>%
+  kable(
+    caption = "Company Ownership Structure",
+    col.names = c("Ownership Structure", "Count", "Percentage"),
+    align = "lcc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+---
+
+# WORKFORCE COMPOSITION
+
+## 16. CRE Professionals at Location
+
+```{r cre-professionals-improved, fig.cap="CRE team size distribution by gender", fig.width=10, fig.height=6}
+cre_prof_detailed <- crew_data %>%
+  filter(!is.na(m9A), !is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+  mutate(
+    cre_size = case_when(
+      m9A %in% c("1", "2-5") ~ "Small (1-5)",
+      m9A %in% c("6-10", "11-25") ~ "Medium (6-25)",
+      m9A %in% c("26-50", "51-100") ~ "Large (26-100)",
+      m9A %in% c("More than 100") ~ "Very Large (100+)",
       TRUE ~ "Other"
     )
   ) %>%
-  filter(!is.na(specialization_simplified))
-
-# Calculate women percentages for 2025
-women_pct_2025 <- specialization_2025 %>%
-  count(specialization_simplified, gender_clean) %>%
-  group_by(specialization_simplified) %>%
+  filter(cre_size != "Other") %>%
+  count(cre_size, Gender = gender_clean) %>%
+  group_by(cre_size) %>%
   mutate(
-    total = sum(n),
-    women_pct = round(ifelse(gender_clean == "Women", (n/total) * 100, 0), 0)
+    Total = sum(n),
+    Percent_within_size = n / Total * 100
   ) %>%
-  filter(gender_clean == "Women") %>%
-  select(specialization_simplified, women_pct) %>%
+  ungroup() %>%
+  mutate(
+    cre_size = factor(cre_size, levels = c("Small (1-5)", "Medium (6-25)", 
+                                           "Large (26-100)", "Very Large (100+)"))
+  )
+
+ggplot(cre_prof_detailed, aes(x = cre_size, y = n, fill = Gender)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+  geom_text(aes(label = sprintf("%d\n(%.1f%%)", n, n/sum(cre_prof_detailed$n)*100)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title = "CRE Team Size at Respondent's Location",
+    subtitle = paste0("Total respondents: ", sum(cre_prof_detailed$n)),
+    x = "CRE Team Size", 
+    y = "Number of Respondents",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray60"),
+    panel.grid.major.x = element_blank()
+  )
+```
+
+## 17. Workplace Gender Distribution 
+
+```{r workplace-gender-improved, fig.cap="Estimated gender distribution at workplace", fig.width=10, fig.height=6}
+# Improved workplace gender analysis
+workplace_gender_detailed <- crew_data %>%
+  filter(!is.na(`m9C[SQ002]`), !is.na(gender_clean), 
+         gender_clean %in% c("Women", "Men")) %>%
+  mutate(
+    female_range = case_when(
+      `m9C[SQ002]` >= 0 & `m9C[SQ002]` < 25 ~ "< 25% women",
+      `m9C[SQ002]` >= 25 & `m9C[SQ002]` < 50 ~ "25-49% women", 
+      `m9C[SQ002]` >= 50 & `m9C[SQ002]` < 75 ~ "50-74% women",
+      `m9C[SQ002]` >= 75 ~ "75%+ women",
+      TRUE ~ "Unknown"
+    ),
+    female_range = factor(female_range, levels = c("< 25% women", "25-49% women", 
+                                                   "50-74% women", "75%+ women"))
+  ) %>%
+  count(female_range, Gender = gender_clean) %>%
+  group_by(female_range) %>%
+  mutate(
+    Total = sum(n),
+    Percent_within_range = n / Total * 100
+  ) %>%
   ungroup()
 
-# Add CRE Overall (total percentage of women)
-overall_women_pct <- specialization_2025 %>%
-  count(gender_clean) %>%
-  mutate(
-    total = sum(n),
-    women_pct = round(ifelse(gender_clean == "Women", (n/total) * 100, 0), 0)
-  ) %>%
-  filter(gender_clean == "Women") %>%
-  pull(women_pct)
+ggplot(workplace_gender_detailed, aes(x = reorder(female_range, desc(Total)), y = n, fill = Gender)) +
+  geom_col(position = "stack", alpha = 0.9) +
+  geom_text(data = workplace_gender_detailed %>% 
+              group_by(female_range) %>% 
+              summarise(Total = sum(n), .groups = 'drop'),
+            aes(x = female_range, y = Total, 
+                label = paste0("n=", Total)),
+            inherit.aes = FALSE, hjust = -0.1, size = 3.5) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  coord_flip() +
+  labs(
+    title = "Workplace Gender Distribution (As Estimated by Respondents)",
+    subtitle = paste0("Total respondents: ", sum(workplace_gender_detailed$n)),
+    x = "Estimated Women Representation at Workplace", 
+    y = "Number of Respondents",
+    fill = "Respondent Gender"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray60"),
+    panel.grid.major.y = element_blank()
+  )
+```
 
-# Print 2025 results
-cat("=== 2025 RESULTS ===\n")
-cat("CRE Overall:", overall_women_pct, "%\n")
-for(i in 1:nrow(women_pct_2025)) {
-  cat(women_pct_2025$specialization_simplified[i], ":", women_pct_2025$women_pct[i], "%\n")
+## 18-19. Management and Team Structure
+
+```{r management-structure-combined, fig.cap="Management and team structure overview", fig.width=12, fig.height=8}
+library(gridExtra)
+
+# 18. Direct Reports Status
+direct_reports_viz <- crew_data %>%
+  filter(!is.na(m11A), !is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+  count(Has_Reports = ifelse(m11A, "Yes", "No"), Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(Percent = n / sum(n) * 100) %>%
+  ungroup()
+
+p1 <- ggplot(direct_reports_viz, aes(x = Has_Reports, y = Percent, fill = Gender)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%", Percent)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  labs(title = "Professionals with Direct Reports", x = "Has Direct Reports", y = "Percentage") +
+  theme_minimal() + theme(legend.position = "none")
+
+# 19. Number of Direct Reports (for those who have them)
+num_reports_viz <- crew_data %>%
+  filter(m11A == TRUE, !is.na(direct_reports_clean), !is.na(gender_clean),
+         gender_clean %in% c("Women", "Men")) %>%
+  mutate(
+    report_range = case_when(
+      direct_reports_clean == 1 ~ "1 person",
+      direct_reports_clean %in% 2:5 ~ "2-5 people",
+      direct_reports_clean %in% 6:10 ~ "6-10 people",
+      direct_reports_clean > 10 ~ "10+ people",
+      TRUE ~ "Unknown"
+    ),
+    report_range = factor(report_range, levels = c("1 person", "2-5 people", 
+                                                   "6-10 people", "10+ people"))
+  ) %>%
+  count(report_range, Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(Percent = n / sum(n) * 100) %>%
+  ungroup()
+
+p2 <- ggplot(num_reports_viz, aes(x = report_range, y = Percent, fill = Gender)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%", Percent)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 2.5) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  labs(title = "Number of Direct Reports (Managers Only)", x = "Number of Reports", y = "Percentage") +
+  theme_minimal() + 
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1))
+
+grid.arrange(p1, p2, ncol = 2, top = "Management Structure Analysis")
+```
+
+## 20-21. Comprehensive Management Analysis
+
+```{r management-comprehensive-fixed-no-exp, fig.width=12, fig.height=6}
+mgmt_analysis <- crew_data %>%
+  filter(!is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+  group_by(Gender = gender_clean) %>%
+  summarise(
+    Total_Respondents = n(),
+    
+    Has_Direct_Reports = sum(m11A == TRUE, na.rm = TRUE),
+    Mgmt_Rate = round(Has_Direct_Reports / Total_Respondents * 100, 1),
+    
+    Avg_Reports = round(mean(direct_reports_clean[m11A == TRUE], na.rm = TRUE), 1),
+    
+    Avg_Promotions = round(mean(as.numeric(`m12A[SQ001]`), na.rm = TRUE), 1),
+    
+    .groups = 'drop'
+  )
+
+mgmt_analysis %>%
+  kable(
+    caption = "Comprehensive Management Analysis by Gender",
+    col.names = c("Gender", "Total", "Managers", "Mgmt Rate (%)", 
+                  "Avg Reports", "Avg Promotions"),
+    align = "lccccc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  add_header_above(c(" " = 2, "Management Status" = 2, "Management Details" = 2))
+
+crew_data_with_exp <- crew_data %>%
+  mutate(
+    years_experience = case_when(
+      m4A == "Less than one year" ~ 0.5,
+      m4A == "Other" & !is.na(`m4A[other]`) ~ as.numeric(`m4A[other]`),
+      TRUE ~ NA_real_
+    ),
+    experience_for_analysis = case_when(
+      years_experience <= 5 ~ "5 or less",
+      years_experience > 5 & years_experience <= 10 ~ "6-10",
+      years_experience > 10 & years_experience <= 20 ~ "11-20", 
+      years_experience > 20 ~ "20+",
+      TRUE ~ NA_character_
+    )
+  )
+
+mgmt_women <- crew_data_with_exp %>%
+  filter(!is.na(experience_for_analysis), !is.na(gender_clean), 
+         gender_clean == "Women") %>%
+  group_by(Experience = experience_for_analysis) %>%
+  summarise(
+    Total_Women = n(),
+    Managers_Women = sum(m11A == TRUE, na.rm = TRUE),
+    Mgmt_Rate_Women = round(Managers_Women / Total_Women * 100, 1),
+    .groups = 'drop'
+  )
+
+mgmt_men <- crew_data_with_exp %>%
+  filter(!is.na(experience_for_analysis), !is.na(gender_clean), 
+         gender_clean == "Men") %>%
+  group_by(Experience = experience_for_analysis) %>%
+  summarise(
+    Total_Men = n(),
+    Managers_Men = sum(m11A == TRUE, na.rm = TRUE),
+    Mgmt_Rate_Men = round(Managers_Men / Total_Men * 100, 1),
+    .groups = 'drop'
+  )
+
+mgmt_by_experience_fixed <- mgmt_women %>%
+  full_join(mgmt_men, by = "Experience") %>%
+  mutate(
+    Experience = factor(Experience, levels = c("5 or less", "6-10", "11-20", "20+"))
+  ) %>%
+  arrange(Experience) %>%
+  mutate(
+    Total_Women = ifelse(is.na(Total_Women), 0, Total_Women),
+    Managers_Women = ifelse(is.na(Managers_Women), 0, Managers_Women),
+    Mgmt_Rate_Women = ifelse(is.na(Mgmt_Rate_Women), 0, Mgmt_Rate_Women),
+    Total_Men = ifelse(is.na(Total_Men), 0, Total_Men),
+    Managers_Men = ifelse(is.na(Managers_Men), 0, Managers_Men),
+    Mgmt_Rate_Men = ifelse(is.na(Mgmt_Rate_Men), 0, Mgmt_Rate_Men)
+  )
+
+if(nrow(mgmt_by_experience_fixed) > 0 && sum(mgmt_by_experience_fixed$Total_Women + mgmt_by_experience_fixed$Total_Men) > 0) {
+  mgmt_by_experience_fixed %>%
+    select(Experience, Total_Women, Managers_Women, Mgmt_Rate_Women,
+           Total_Men, Managers_Men, Mgmt_Rate_Men) %>%
+    kable(
+      caption = "Management Rates by Experience Level and Gender",
+      col.names = c("Experience", "Total", "Managers", "Rate (%)", 
+                    "Total", "Managers", "Rate (%)"),
+      align = "lcccccc"
+    ) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+    add_header_above(c(" " = 1, "Women" = 3, "Men" = 3))
+} else {
+  cat("Note: Experience-based management analysis not available due to limited experience data.\n")
+  
+  if("m3A" %in% names(crew_data)) {
+    position_mgmt <- crew_data %>%
+      filter(!is.na(gender_clean), gender_clean %in% c("Women", "Men"), !is.na(m3A)) %>%
+      group_by(Position = m3A, Gender = gender_clean) %>%
+      summarise(
+        Total = n(),
+        Managers = sum(m11A == TRUE, na.rm = TRUE),
+        Mgmt_Rate = round(Managers / Total * 100, 1),
+        .groups = 'drop'
+      ) %>%
+      filter(Total >= 5)  # Only show positions with 5+ respondents
+    
+    if(nrow(position_mgmt) > 0) {
+      position_mgmt %>%
+        pivot_wider(names_from = Gender, values_from = c(Total, Managers, Mgmt_Rate),
+                    names_sep = "_", values_fill = 0) %>%
+        select(Position, Total_Women, Managers_Women, Mgmt_Rate_Women,
+               Total_Men, Managers_Men, Mgmt_Rate_Men) %>%
+        kable(
+          caption = "Management Rates by Position Level and Gender",
+          col.names = c("Position", "Total", "Managers", "Rate (%)", 
+                        "Total", "Managers", "Rate (%)"),
+          align = "lcccccc"
+        ) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+        add_header_above(c(" " = 1, "Women" = 3, "Men" = 3))
+    }
+  }
 }
+```
 
-# Create complete dataset for charts
-chart_data_2025 <- women_pct_2025 %>%
-  add_row(specialization_simplified = "CRE Overall", women_pct = overall_women_pct) %>%
+## 22. Number of Direct Reports
+
+```{r num-reports-improved, fig.cap="Number of direct reports by gender", fig.width=10, fig.height=6}
+num_reports_detailed <- crew_data %>%
+  filter(m11A == TRUE, !is.na(direct_reports_clean), !is.na(gender_clean),
+         gender_clean %in% c("Women", "Men")) %>%
   mutate(
-    specialization_simplified = factor(specialization_simplified, 
-                                     levels = c("CRE Overall", "Asset Management", "Brokerage", "Development", "Finance", "Other"))
+    report_range = case_when(
+      direct_reports_clean == 1 ~ "1 person",
+      direct_reports_clean %in% 2:5 ~ "2-5 people",
+      direct_reports_clean %in% 6:10 ~ "6-10 people",
+      direct_reports_clean %in% 11:20 ~ "11-20 people", 
+      direct_reports_clean > 20 ~ "20+ people",
+      TRUE ~ "Unknown"
+    ),
+    report_range = factor(report_range, levels = c("1 person", "2-5 people", 
+                                                   "6-10 people", "11-20 people", "20+ people"))
   ) %>%
-  arrange(specialization_simplified)
+  count(report_range, Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(
+    Total_by_Gender = sum(n),
+    Percent_within_Gender = n / Total_by_Gender * 100
+  ) %>%
+  ungroup()
+
+ggplot(num_reports_detailed, aes(x = report_range, y = Percent_within_Gender, fill = Gender)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%\n(n=%d)", Percent_within_Gender, n)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1),
+                     limits = c(0, max(num_reports_detailed$Percent_within_Gender) * 1.15)) +
+  labs(
+    title = "Number of Direct Reports by Gender (Managers Only)",
+    subtitle = paste0("Total managers analyzed: ", sum(num_reports_detailed$n)),
+    x = "Number of Direct Reports", 
+    y = "Percentage within Gender",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray60"),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+reports_summary <- num_reports_detailed %>%
+  group_by(report_range) %>%
+  summarise(
+    Women = sum(n[Gender == "Women"], na.rm = TRUE),
+    Men = sum(n[Gender == "Men"], na.rm = TRUE),
+    Total = sum(n),
+    Percent_Women = round(Women / Total * 100, 1),
+    .groups = 'drop'
+  ) %>%
+  arrange(report_range)
+
+reports_summary %>%
+  kable(
+    caption = "Distribution of Direct Reports by Manager Gender",
+    col.names = c("Number of Reports", "Women Managers", "Men Managers", "Total", "% Women"),
+    align = "lcccc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## 23. Gender Distribution of Direct Reports
+
+```{r reports-gender-enhanced, fig.cap="Gender distribution of direct reports by manager gender", fig.width=12, fig.height=6}
+reports_gender_detailed <- crew_data %>%
+  filter(!is.na(`m11B[SQ002]`), !is.na(gender_clean), 
+         gender_clean %in% c("Women", "Men")) %>%
+  mutate(
+    female_reports_range = case_when(
+      `m11B[SQ002]` == 0 ~ "0% women",
+      `m11B[SQ002]` > 0 & `m11B[SQ002]` < 25 ~ "1-24% women",
+      `m11B[SQ002]` >= 25 & `m11B[SQ002]` < 50 ~ "25-49% women", 
+      `m11B[SQ002]` >= 50 & `m11B[SQ002]` < 75 ~ "50-74% women",
+      `m11B[SQ002]` >= 75 ~ "75%+ women",
+      TRUE ~ "Unknown"
+    ),
+    female_reports_range = factor(female_reports_range, 
+                                  levels = c("0% women", "1-24% women", "25-49% women",
+                                             "50-74% women", "75%+ women"))
+  ) %>%
+  count(female_reports_range, Manager_Gender = gender_clean) %>%
+  group_by(Manager_Gender) %>%
+  mutate(
+    Total_by_Manager_Gender = sum(n),
+    Percent_within_Manager_Gender = n / Total_by_Manager_Gender * 100
+  ) %>%
+  ungroup()
+
+ggplot(reports_gender_detailed, aes(x = female_reports_range, y = Percent_within_Manager_Gender, 
+                                    fill = Manager_Gender)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%\n(n=%d)", Percent_within_Manager_Gender, n)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 2.8) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1),
+                     limits = c(0, max(reports_gender_detailed$Percent_within_Manager_Gender) * 1.2)) +
+  labs(
+    title = "Gender Distribution of Direct Reports by Manager Gender",
+    subtitle = paste0("Analysis of ", sum(reports_gender_detailed$n), " managers with direct reports"),
+    x = "Percentage of Women Among Direct Reports", 
+    y = "Percentage of Managers",
+    fill = "Manager Gender"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray60"),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
 
 ```
+
+## 24. Career Progression Analysis
+
+```{r career-progression-comprehensive-fixed, fig.cap="Comprehensive career progression analysis", fig.width=14, fig.height=10}
+career_data <- crew_data %>%
+  filter(!is.na(gender_clean), gender_clean %in% c("Women", "Men")) %>%
+  mutate(
+    promotions_accepted = as.numeric(`m12A[SQ001]`),
+    promotions_declined = as.numeric(`m12A[SQ002]`),
+    lateral_accepted = as.numeric(`m12A[SQ003]`),
+    lateral_declined = as.numeric(`m12A[SQ004]`),
+    
+    promotions_category = case_when(
+      promotions_accepted == 0 ~ "0 promotions",
+      promotions_accepted %in% 1:2 ~ "1-2 promotions",
+      promotions_accepted %in% 3:5 ~ "3-5 promotions",
+      promotions_accepted > 5 ~ "5+ promotions",
+      TRUE ~ NA_character_
+    ),
+    
+    # Create categories for promotions declined
+    declined_category = case_when(
+      promotions_declined == 0 ~ "0 declined",
+      promotions_declined %in% 1:2 ~ "1-2 declined",
+      promotions_declined >= 3 ~ "3+ declined",
+      TRUE ~ NA_character_
+    )
+  )
+
+promotions_accepted_viz <- career_data %>%
+  filter(!is.na(promotions_category)) %>%
+  count(promotions_category, Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(
+    Total_by_Gender = sum(n),
+    Percent = n / Total_by_Gender * 100
+  ) %>%
+  ungroup() %>%
+  mutate(promotions_category = factor(promotions_category, 
+                                      levels = c("0 promotions", "1-2 promotions", 
+                                                 "3-5 promotions", "5+ promotions")))
+
+p1 <- ggplot(promotions_accepted_viz, aes(x = promotions_category, y = Percent, fill = Gender)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%", Percent)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  labs(title = "Promotions Accepted in CRE Career", 
+       x = "Number of Promotions", y = "Percentage") +
+  theme_minimal() + 
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+promotions_declined_viz <- career_data %>%
+  filter(!is.na(declined_category)) %>%
+  count(declined_category, Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(
+    Total_by_Gender = sum(n),
+    Percent = n / Total_by_Gender * 100
+  ) %>%
+  ungroup() %>%
+  mutate(declined_category = factor(declined_category, 
+                                    levels = c("0 declined", "1-2 declined", "3+ declined")))
+
+p2 <- ggplot(promotions_declined_viz, aes(x = declined_category, y = Percent, fill = Gender)) +
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.9) +
+  geom_text(aes(label = sprintf("%.1f%%", Percent)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  labs(title = "Promotions Declined in CRE Career", 
+       x = "Number of Promotions Declined", y = "Percentage") +
+  theme_minimal() + 
+  theme(legend.position = "bottom")
+
+career_summary <- career_data %>%
+  filter(!is.na(promotions_accepted) | !is.na(lateral_accepted)) %>%
+  group_by(Gender = gender_clean) %>%
+  summarise(
+    n = n(),
+    
+    avg_promotions_accepted = round(mean(promotions_accepted, na.rm = TRUE), 1),
+    median_promotions_accepted = round(median(promotions_accepted, na.rm = TRUE), 1),
+    avg_promotions_declined = round(mean(promotions_declined, na.rm = TRUE), 1),
+    
+    avg_lateral_accepted = round(mean(lateral_accepted, na.rm = TRUE), 1),
+    avg_lateral_declined = round(mean(lateral_declined, na.rm = TRUE), 1),
+    
+    total_moves = avg_promotions_accepted + avg_lateral_accepted,
+    total_declined = avg_promotions_declined + avg_lateral_declined,
+    acceptance_ratio = round(total_moves / (total_moves + total_declined), 2),
+    
+    .groups = 'drop'
+  )
+
+library(gridExtra)
+grid.arrange(p1, p2, ncol = 2, 
+             top = "Career Progression Patterns by Gender")
+
+career_summary %>%
+  select(Gender, n, avg_promotions_accepted, avg_promotions_declined, 
+         avg_lateral_accepted, avg_lateral_declined, acceptance_ratio) %>%
+  kable(
+    caption = "Career Progression Summary Statistics by Gender",
+    col.names = c("Gender", "N", "Avg Promotions Accepted", "Avg Promotions Declined", 
+                  "Avg Lateral Accepted", "Avg Lateral Declined", "Acceptance Ratio"),
+    align = "lcccccc",
+    digits = 2
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  add_header_above(c(" " = 2, "Promotions" = 2, "Lateral Moves" = 2, "Overall" = 1))
+
+career_data_with_exp <- career_data %>%
+  mutate(
+    years_experience = case_when(
+      m4A == "Less than one year" ~ 0.5,
+      m4A == "Other" & !is.na(`m4A[other]`) ~ as.numeric(`m4A[other]`),
+      TRUE ~ NA_real_
+    ),
+    experience_for_career = case_when(
+      years_experience <= 5 ~ "5 or less",
+      years_experience > 5 & years_experience <= 10 ~ "6-10",
+      years_experience > 10 & years_experience <= 20 ~ "11-20", 
+      years_experience > 20 ~ "20+",
+      TRUE ~ NA_character_
+    )
+  )
+
+career_by_experience <- career_data_with_exp %>%
+  filter(!is.na(experience_for_career), !is.na(promotions_accepted)) %>%
+  group_by(Experience = experience_for_career, Gender = gender_clean) %>%
+  summarise(
+    n = n(),
+    avg_promotions = round(mean(promotions_accepted, na.rm = TRUE), 1),
+    pct_no_promotions = round(sum(promotions_accepted == 0, na.rm = TRUE) / n() * 100, 1),
+    pct_3plus_promotions = round(sum(promotions_accepted >= 3, na.rm = TRUE) / n() * 100, 1),
+    .groups = 'drop'
+  ) %>%
+  arrange(Experience, Gender)
+
+if(nrow(career_by_experience) > 0 && sum(career_by_experience$n) >= 20) {
+  career_by_experience %>%
+    kable(
+      caption = "Career Progression by Experience Level and Gender",
+      col.names = c("Experience", "Gender", "N", "Avg Promotions", "% No Promotions", "% 3+ Promotions"),
+      align = "llcccc"
+    ) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+    collapse_rows(columns = 1, valign = "top")
+} else {
+  cat("Note: Experience-based career progression analysis not shown due to limited experience data.\n")
+  
+  if("m3A" %in% names(career_data)) {
+    career_by_position <- career_data %>%
+      filter(!is.na(m3A), !is.na(promotions_accepted)) %>%
+      group_by(Position = m3A, Gender = gender_clean) %>%
+      summarise(
+        n = n(),
+        avg_promotions = round(mean(promotions_accepted, na.rm = TRUE), 1),
+        pct_no_promotions = round(sum(promotions_accepted == 0, na.rm = TRUE) / n() * 100, 1),
+        pct_3plus_promotions = round(sum(promotions_accepted >= 3, na.rm = TRUE) / n() * 100, 1),
+        .groups = 'drop'
+      ) %>%
+      filter(n >= 3) %>%  # Only positions with 3+ respondents
+      arrange(Position, Gender)
+    
+    if(nrow(career_by_position) > 0) {
+      career_by_position %>%
+        kable(
+          caption = "Career Progression by Current Position and Gender",
+          col.names = c("Position", "Gender", "N", "Avg Promotions", "% No Promotions", "% 3+ Promotions"),
+          align = "llcccc"
+        ) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+        collapse_rows(columns = 1, valign = "top")
+    }
+  }
+}
+```
+
+# WORK PATTERNS & ARRANGEMENTS
+
+## 25. Work Arrangement Patterns
+
+```{r work-arrangements, fig.cap="Work arrangement patterns by gender"}
+work_data <- crew_data %>%
+  filter(!is.na(work_arrangement), work_arrangement != "Unknown/Invalid", 
+         gender_clean %in% c("Women", "Men")) %>%
+  count(Work_Type = work_arrangement, Gender = gender_clean) %>%
+  group_by(Gender) %>%
+  mutate(Percent = round((n / sum(n)) * 100, 1))
+
+ggplot(work_data, aes(x = Work_Type, y = Percent, fill = Gender)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = paste0(Percent, "%")),
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 3) +
+  scale_fill_manual(values = c("Women" = "#d94f70", "Men" = "#1f4068")) +
+  labs(
+    title = "Work Arrangement Patterns by Gender (2025)",
+    x = "Primary Work Type",
+    y = "Percentage",
+    fill = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+work_summary <- crew_data %>%
+  filter(!is.na(work_arrangement), work_arrangement != "Unknown/Invalid") %>%
+  count(work_arrangement) %>%
+  mutate(Percent = round((n / sum(n)) * 100, 1)) %>%
+  arrange(desc(n))
+
+work_summary %>%
+  kable(
+    caption = "Work Arrangement Distribution (2025)",
+    col.names = c("Work Arrangement", "Count", "Percentage"),
+    align = "lcc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## 26. Work Hours Distribution
+
+```{r work-hours-distribution, fig.cap="Distribution of work hours by type"}
+filtered_data <- crew_data %>%
+  filter(!is.na(office_hours_clean), 
+         !is.na(remote_hours_clean), 
+         !is.na(field_hours_clean),
+         total_work_hours >= 5, 
+         total_work_hours <= 80)
+
+hours_summary <- filtered_data %>%
+  summarise(
+    Office_Hours = round(mean(office_hours_clean, na.rm = TRUE), 1),
+    Remote_Hours = round(mean(remote_hours_clean, na.rm = TRUE), 1),
+    Field_Hours = round(mean(field_hours_clean, na.rm = TRUE), 1),
+    Total_Sample = n()
+  ) %>%
+  pivot_longer(cols = c("Office_Hours", "Remote_Hours", "Field_Hours"), 
+               names_to = "Work_Type", values_to = "Average_Hours") %>%
+  mutate(Work_Type = str_replace(Work_Type, "_", " "))
+
+ggplot(hours_summary, aes(x = Work_Type, y = Average_Hours)) +
+  geom_col(fill = "#2c3e50") +
+  geom_text(aes(label = paste0(Average_Hours, " hrs")), vjust = -0.5, size = 4) +
+  labs(
+    title = "Average Work Hours by Location Type",
+    x = "Work Location",
+    y = "Average Hours per Week"
+  ) +
+  theme_minimal()
+
+hours_table <- data.frame(
+  Work_Type = c("Office", "Remote", "Field"),
+  Mean_Hours = c(
+    round(mean(filtered_data$office_hours_clean, na.rm = TRUE), 1),
+    round(mean(filtered_data$remote_hours_clean, na.rm = TRUE), 1),
+    round(mean(filtered_data$field_hours_clean, na.rm = TRUE), 1)
+  ),
+  Median_Hours = c(
+    round(median(filtered_data$office_hours_clean, na.rm = TRUE), 1),
+    round(median(filtered_data$remote_hours_clean, na.rm = TRUE), 1),
+    round(median(filtered_data$field_hours_clean, na.rm = TRUE), 1)
+  )
+)
+
+hours_table %>%
+  kable(
+    caption = "Work Hours Summary Statistics",
+    col.names = c("Work Type", "Mean Hours", "Median Hours"),
+    align = "lcc"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+---
+
+# DATA QUALITY SUMMARY
+
+```{r data-quality-summary-fixed}
+cat("📊 DATA QUALITY SUMMARY FOR DESCRIPTIVE PLOTS\n")
+
+quality_check <- crew_data %>%
+  summarise(
+    total_responses = n(),
+    gender_available = sum(!is.na(gender_clean)),
+    age_available = sum(!is.na(m25)),
+    location_available = sum(!is.na(WHEREFROM)),
+    education_available = sum(!is.na(education_simplified)),
+    
+    experience_available = sum(
+      (!is.na(m4A) & m4A == "Less than one year") | 
+      (!is.na(m4A) & m4A == "Other" & !is.na(`m4A[other]`))
+    ),
+    
+    work_arrangement_valid = sum(!is.na(work_arrangement) & work_arrangement != "Unknown/Invalid"),
+    specialization_available = sum(!is.na(m1B)),
+    position_available = sum(!is.na(m3A)),
+    .groups = 'drop'
+  )
+
+cat("Response Rates:\n")
+cat("Total respondents:", quality_check$total_responses, "\n")
+cat("Gender data:", quality_check$gender_available, 
+    "(", round(quality_check$gender_available/quality_check$total_responses*100, 1), "%)\n")
+cat("Age data:", quality_check$age_available,
+    "(", round(quality_check$age_available/quality_check$total_responses*100, 1), "%)\n") 
+cat("Location data:", quality_check$location_available,
+    "(", round(quality_check$location_available/quality_check$total_responses*100, 1), "%)\n")
+cat("Education data:", quality_check$education_available,
+    "(", round(quality_check$education_available/quality_check$total_responses*100, 1), "%)\n")
+cat("Experience data:", quality_check$experience_available,
+    "(", round(quality_check$experience_available/quality_check$total_responses*100, 1), "%)\n")
+cat("Work arrangement data:", quality_check$work_arrangement_valid,
+    "(", round(quality_check$work_arrangement_valid/quality_check$total_responses*100, 1), "%)\n")
+cat("Specialization data:", quality_check$specialization_available,
+    "(", round(quality_check$specialization_available/quality_check$total_responses*100, 1), "%)\n")
+cat("Position data:", quality_check$position_available,
+    "(", round(quality_check$position_available/quality_check$total_responses*100, 1), "%)\n")
